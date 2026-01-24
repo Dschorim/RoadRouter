@@ -1,0 +1,56 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Central Europe Route Planner</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23231a1a' width='100' height='100'/><path fill='%2332b8c6' d='M50 15c-19.3 0-35 15.7-35 35s35 45 35 45 35-25.7 35-45-15.7-35-35-35zm0 50c-8.3 0-15-6.7-15-15s6.7-15 15-15 15 6.7 15 15-6.7 15-15 15z'/></svg>">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <div id="map"></div>
+        
+        <div class="sidebar-card">
+            <div class="card-header">
+                <h2>Route Planner</h2>
+                <button id="debugToggleBtn" class="btn-icon-toggle" title="Toggle Debug Visualization">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="1"/>
+                        <path d="M12 2v4m0 12v4M4.22 4.22l2.83 2.83m5.9 5.9l2.83 2.83M2 12h4m12 0h4M4.22 19.78l2.83-2.83m5.9-5.9l2.83-2.83"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <div class="card-content">
+                <div id="initialSearch" class="form-group">
+                    <label>Start Your Route</label>
+                    <div class="search-input-wrapper">
+                        <input type="text" class="search-input" id="initialSearchInput" placeholder="Search first location...">
+                    </div>
+                </div>
+                
+                <div id="routeContent" style="display: none;">
+                    <div class="form-group">
+                        <label>Route Points</label>
+                        <div class="route-points-list" id="routePointsList"></div>
+                        <button class="btn btn-primary" onclick="addNewWaypoint()">Add Point</button>
+                    </div>
+                    <div id="routeInfo"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div id="contextMenu" class="context-menu"></div>
+        <div id="autocompletePortal"></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/geocoding.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
