@@ -1,6 +1,6 @@
 # Central Europe Route Planner
 
-A modern, interactive route planning application for navigating across Central Europe. The application uses OSRM (Open Source Routing Machine) for routing and Nominatim/Photon for reverse geocoding.
+A modern, interactive route planning application for navigating across Central Europe. The application uses OSRM (Open Source Routing Machine) for routing and Photon for reverse geocoding.
 
 ## Features
 
@@ -53,15 +53,19 @@ frontend/
     ├── config.js       # Configuration (API endpoints, map center, etc.)
     ├── utils.js        # Utility functions (distance/duration formatting)
     ├── geocoding.js    # Reverse geocoding with rate limiting and caching
-    └── main.js         # Core application logic (map, routing, UI)
+    ├── modules/        # Smaller feature-focused modules
+    │   └── autocomplete.js  # Autocomplete helpers and rendering
+    └── main.js         # App entry point (initialization, high-level orchestration)
 ```
+
+Note: The JavaScript has been refactored into smaller ES modules for better organization and testability (autocomplete features live in `js/modules/autocomplete.js`). The app still runs the same and is loaded via `type="module"` in `index.html`.
 
 ## Getting Started
 
 ### Prerequisites
 - Docker and Docker Compose
 - OSRM backend running on `http://localhost:5000`
-- Nominatim backend running on `http://localhost:2322`
+- Photon backend running on `http://localhost:2322`
 
 ### Installation
 
@@ -87,7 +91,7 @@ Edit `js/config.js` to customize:
 - `MAPCENTER` - Initial map center coordinates
 - `MAPZOOM` - Initial zoom level
 - `OSRMAPI` - OSRM backend URL
-- `NOMINATIMAPI` - Nominatim backend URL
+- `PHOTONAPI` - Photon backend URL
 - `COUNTRYCODES` - Supported country codes
 - `ENABLE_DEBUG_MODE` - Toggle debug visualization
 
@@ -114,7 +118,7 @@ Edit `js/config.js` to customize:
 ## Technical Details
 
 ### State Management
-- All route points stored in `routePoints` array
+- All route points stored in `APP.routePoints` (centralized app state)
 - Each point has: id, lat, lng, address, type (start/dest/waypoint)
 - Automatic type updates maintain start/destination positions
 
@@ -124,7 +128,7 @@ Edit `js/config.js` to customize:
 - Live preview while dragging (throttled to 0.5s intervals)
 
 ### Geocoding
-- Uses Nominatim reverse geocoding
+- Uses Photon reverse geocoding
 - Requests queued to respect API rate limits (0.5s between requests)
 - Results cached to minimize API calls
 - Fallback to coordinates if reverse geocoding fails
@@ -141,8 +145,10 @@ Edit `js/config.js` to customize:
 - **Route**: `GET /route/v1/driving/{coordinates}?overview=full&geometries=geojson&steps=true`
 - **Tiles**: `GET /tile/v1/driving/tile(x,y,z).mvt` (debug mode only)
 
-### Nominatim
-- **Reverse**: `GET /reverse?lon={lng}&lat={lat}&limit=1`
+### Photon
+
+- **Search**: `GET /api?q={query}&limit=1&lang=en`
+- **Reverse**: `GET /reverse?lon={lng}&lat={lat}&limit=1`- **Reverse**: `GET /reverse?lon={lng}&lat={lat}&limit=1`
 - **Search**: `GET /search?q={query}&limit=1&countrycodes={codes}`
 
 ## Browser Compatibility
