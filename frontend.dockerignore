@@ -3,3 +3,8 @@ npm-debug.log
 .git
 .gitignore
 README.md
+
+# magpx upload proxy config (contains OneLapFit credentials and mapbox token)
+# JS magpx local config (contains OneLapFit credentials)
+tools/upload-proxy/.magpx.json
+

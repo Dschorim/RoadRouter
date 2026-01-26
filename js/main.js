@@ -935,9 +935,19 @@ async function calculateRoute() {
                         <span class="stat-value">${formatDuration(duration)}</span>
                     </div>
                 </div>
+                <div class="route-actions" style="margin-top:12px; display:flex; gap:8px;">
+                    <button id="exportGpxBtn" class="btn btn-primary">Export GPX</button>
+                    <button id="exportDeviceBtn" class="btn btn-outline">Export to Device</button>
+                </div>
             </div>
         `;
-        
+
+        // wire buttons
+        const gpxBtn = document.getElementById('exportGpxBtn');
+        const deviceBtn = document.getElementById('exportDeviceBtn');
+        if (gpxBtn) gpxBtn.addEventListener('click', () => exportGPX());
+        if (deviceBtn) deviceBtn.addEventListener('click', () => openDeviceModal());
+
         if (debugMode) {
             // Debug mode is handled by the tile layer
         }
@@ -959,6 +969,274 @@ function distanceToLineSegment(point, lineStart, lineEnd) {
     const ddy = point.lat - closestY;
     
     return Math.sqrt(ddx * ddx + ddy * ddy);
+}
+
+// ==================== GPX EXPORT HELPERS ====================
+
+function escapeXml(unsafe) {
+    if (!unsafe) return '';
+    return String(unsafe).replace(/[&<>\"']/g, (c) => {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c];
+    });
+}
+
+function generateGPX(name = 'Route') {
+    const date = new Date().toISOString();
+    let coords = [];
+    if (APP.currentRoute && APP.currentRoute.geometry && Array.isArray(APP.currentRoute.geometry.coordinates)) {
+        coords = APP.currentRoute.geometry.coordinates;
+    } else {
+        coords = APP.routePoints.filter(p => p.lat !== null && p.lng !== null).map(p => [p.lng, p.lat]);
+    }
+
+    const trkpts = coords.map(([lon, lat]) => `        <trkpt lat="${lat}" lon="${lon}"/>`).join('\n');
+    // Note: Avoid multiple <wpt> entries to prevent some importers from showing multiple import options.
+    const gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Route Planner" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata>\n    <name>${escapeXml(name)}</name>\n    <time>${date}</time>\n  </metadata>\n  <trk>\n    <name>${escapeXml(name)}</name>\n    <trkseg>\n${trkpts}\n    </trkseg>\n  </trk>\n</gpx>`;
+
+    return gpx;
+}
+
+function exportGPX(filename = 'route.gpx') {
+    // generate coords and ensure there is something to export
+    const coordsExist = (APP.currentRoute && APP.currentRoute.geometry && Array.isArray(APP.currentRoute.geometry.coordinates) && APP.currentRoute.geometry.coordinates.length > 0) ||
+        (APP.routePoints && APP.routePoints.some(p => p.lat !== null && p.lng !== null));
+    if (!coordsExist) {
+        alert('No route or coordinates available to export.');
+        return;
+    }
+
+    const gpx = generateGPX('Route');
+    const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+
+
+// Device export modal and upload helpers
+function openDeviceModal() {
+    if (document.getElementById('deviceModal')) return;
+    const modal = document.createElement('div');
+    modal.id = 'deviceModal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <h3>Export to Device</h3>
+        <p>Upload the current GPX to your Magene device using the local <code>magpx-js</code> importer via the optional upload proxy. See <a href="tools/upload-proxy/README.md" target="_blank">proxy docs</a> for setup instructions.</p>
+        <div id="deviceMsg" class="muted" style="margin-top:8px"></div>
+        <div style="display:flex; gap:8px; margin-top:12px; align-items:center;">
+          <button id="uploadProxyBtn" class="btn btn-primary">Upload via Server (per-user)</button>
+          <button id="serverLoginBtn" class="btn btn-outline">Server Login</button>
+          <span id="serverStatus" style="margin-left:8px;font-size:13px;color:var(--color-text-secondary);"></span>
+          <button id="svLogoutBtn" class="btn" style="display:none;margin-left:8px;">Logout</button>
+          <button id="directUploadBtn" class="btn btn-outline">Direct Upload (experimental)</button>
+          <button id="downloadGpxBtn" class="btn btn-outline">Download GPX</button>
+          <button id="closeDeviceModalBtn" class="btn">Close</button>
+        </div>
+        <div id="directUploadForm" style="display:none; margin-top:12px; gap:8px;">
+          <label style="font-size:13px; color:var(--color-text-secondary);">Mapbox Token</label>
+          <input id="duMapboxToken" class="search-input" placeholder="pk... (optional)" />
+          <label style="font-size:13px; color:var(--color-text-secondary);">OneLapFit Username</label>
+          <input id="duUsername" class="search-input" placeholder="email or username" />
+          <label style="font-size:13px; color:var(--color-text-secondary);">OneLapFit Password</label>
+          <input id="duPassword" type="password" class="search-input" placeholder="password" />
+          <div style="display:flex; gap:8px; margin-top:8px;">
+            <button id="duUploadBtn" class="btn btn-primary">Upload Direct</button>
+            <button id="duCancelBtn" class="btn">Cancel</button>
+          </div>
+        </div>
+
+        <div id="serverLoginForm" style="display:none; margin-top:12px; gap:8px;">
+          <label style="font-size:13px; color:var(--color-text-secondary);">Server OneLapFit Username</label>
+          <input id="svUsername" class="search-input" placeholder="email or username" />
+          <label style="font-size:13px; color:var(--color-text-secondary);">Server OneLapFit Password</label>
+          <input id="svPassword" type="password" class="search-input" placeholder="password" />
+          <label style="font-size:13px; color:var(--color-text-secondary);">Server Mapbox Token</label>
+          <input id="svMapboxToken" class="search-input" placeholder="pk..." />
+          <div style="display:flex; gap:8px; margin-top:8px;">
+            <button id="svLoginBtn" class="btn btn-primary">Login to Server</button>
+            <button id="svCancelBtn" class="btn">Cancel</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    // quick health check for the upload proxy
+    const proxyMsgEl = document.getElementById('deviceMsg');
+    try {
+        const proxyBase = CONFIG.UPLOAD_PROXY_URL.replace(/\/api\/upload$/, '');
+        fetch(proxyBase + '/api/health', { method: 'GET' }).then(r => {
+            if (!r.ok) proxyMsgEl.textContent = `Upload proxy not reachable at ${proxyBase} (start it if you want direct upload)`;
+            else proxyMsgEl.textContent = `Upload proxy detected at ${proxyBase}`;
+        }).catch(() => {
+            proxyMsgEl.textContent = `Upload proxy not reachable at ${proxyBase} (start it if you want direct upload)`;
+        });
+    } catch (e) {
+        // ignore
+    }
+
+    document.getElementById('closeDeviceModalBtn').addEventListener('click', closeDeviceModal);
+    document.getElementById('downloadGpxBtn').addEventListener('click', () => exportGPX());
+
+    // Upload via proxy (uses server-side per-user token if present)
+    // The actual upload logic is wired below to attach Authorization header when a session token is stored in localStorage.
+
+    // Direct Upload (experimental, browser-only)
+    const directBtn = document.getElementById('directUploadBtn');
+    if (directBtn) directBtn.addEventListener('click', () => {
+        const form = document.getElementById('directUploadForm');
+        form.style.display = form.style.display === 'none' ? 'flex' : 'none';
+        // prefill Mapbox token
+        const mbEl = document.getElementById('duMapboxToken');
+        if (mbEl && CONFIG.MAPBOX_TOKEN) mbEl.value = CONFIG.MAPBOX_TOKEN;
+    });
+
+    const duCancelBtn = document.getElementById('duCancelBtn');
+    if (duCancelBtn) duCancelBtn.addEventListener('click', () => { document.getElementById('directUploadForm').style.display = 'none'; });
+
+    // Server login form toggles
+    const serverLoginBtn = document.getElementById('serverLoginBtn');
+    if (serverLoginBtn) serverLoginBtn.addEventListener('click', () => {
+        const form = document.getElementById('serverLoginForm');
+        form.style.display = form.style.display === 'none' ? 'flex' : 'none';
+        const mb = document.getElementById('svMapboxToken'); if (mb && CONFIG.MAPBOX_TOKEN) mb.value = CONFIG.MAPBOX_TOKEN;
+    });
+
+    // initialize server login state (if token stored)
+    const svLogoutBtn = document.getElementById('svLogoutBtn');
+    const serverStatus = document.getElementById('serverStatus');
+    try {
+        const storedToken = localStorage.getItem('uploadServerToken');
+        const storedUserKey = localStorage.getItem('uploadServerUserKey');
+        if (storedToken && storedUserKey) {
+            if (serverStatus) serverStatus.textContent = 'Logged in: ' + storedUserKey;
+            if (svLogoutBtn) svLogoutBtn.style.display = 'inline-block';
+            if (serverLoginBtn) serverLoginBtn.disabled = true;
+        }
+    } catch (e) { /* ignore */ }
+
+    if (svLogoutBtn) svLogoutBtn.addEventListener('click', () => {
+        try { localStorage.removeItem('uploadServerToken'); localStorage.removeItem('uploadServerUserKey'); } catch (e) {}
+        if (serverStatus) serverStatus.textContent = '';
+        svLogoutBtn.style.display = 'none';
+        if (serverLoginBtn) serverLoginBtn.disabled = false;
+    });
+    const svCancelBtn = document.getElementById('svCancelBtn'); if (svCancelBtn) svCancelBtn.addEventListener('click', () => { document.getElementById('serverLoginForm').style.display = 'none'; });
+    const duUploadBtn = document.getElementById('duUploadBtn');
+    if (duUploadBtn) duUploadBtn.addEventListener('click', async () => {
+        const msgEl = document.getElementById('deviceMsg');
+        const mapboxToken = document.getElementById('duMapboxToken').value.trim();
+        const username = document.getElementById('duUsername').value.trim();
+        const password = document.getElementById('duPassword').value;
+        if (!mapboxToken) { msgEl.textContent = 'Mapbox token is required for direct upload.'; return; }
+        if (!username || !password) { msgEl.textContent = 'OneLapFit username and password required.'; return; }
+        msgEl.textContent = 'Preparing direct upload...';
+        try {
+            const module = await import('./device-upload.js');
+            const gpx = generateGPX('Route');
+            await module.directUpload({ gpx, mapboxToken, username, password });
+            msgEl.textContent = 'Direct upload successful. The route should appear in your device app.';
+            document.getElementById('directUploadForm').style.display = 'none';
+        } catch (err) {
+            msgEl.textContent = 'Direct upload failed: ' + (err.message || JSON.stringify(err));
+        }
+    });
+
+    // Server login handler (creates server-side per-user session token)
+    const svLoginBtn = document.getElementById('svLoginBtn');
+    if (svLoginBtn) svLoginBtn.addEventListener('click', async () => {
+        const msgEl = document.getElementById('deviceMsg');
+        const username = document.getElementById('svUsername').value.trim();
+        const password = document.getElementById('svPassword').value;
+        const mapboxToken = document.getElementById('svMapboxToken').value.trim();
+        if (!username || !password) { msgEl.textContent = 'Username and password required for server login.'; return; }
+        msgEl.textContent = 'Logging in to server...';
+        try {
+            const resp = await fetch(CONFIG.UPLOAD_PROXY_URL.replace(/\/api\/upload$/, '') + '/api/auth/login', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password, mapbox_token: mapboxToken })
+            });
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || JSON.stringify(data));
+            // store session token locally
+            localStorage.setItem('uploadServerToken', data.token);
+            localStorage.setItem('uploadServerUserKey', data.userKey);
+            msgEl.textContent = 'Server login successful.';
+            document.getElementById('serverLoginForm').style.display = 'none';
+            const serverStatus = document.getElementById('serverStatus'); if (serverStatus) serverStatus.textContent = 'Logged in: ' + data.userKey;
+            const svLogoutBtn = document.getElementById('svLogoutBtn'); if (svLogoutBtn) svLogoutBtn.style.display = 'inline-block';
+            if (serverLoginBtn) serverLoginBtn.disabled = true;
+        } catch (err) {
+            msgEl.textContent = 'Server login failed: ' + (err.message || JSON.stringify(err));
+        }
+    });
+
+    // Upload via server using stored session token if present
+    const uploadServerBtn = document.getElementById('uploadProxyBtn');
+    if (uploadServerBtn) uploadServerBtn.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        const msgEl = document.getElementById('deviceMsg');
+        msgEl.textContent = 'Uploading via server...';
+        const gpx = generateGPX('Route');
+        const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+        try {
+            const token = localStorage.getItem('uploadServerToken');
+            const form = new FormData(); form.append('file', blob, 'route.gpx');
+            const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+            const resp = await fetch(CONFIG.UPLOAD_PROXY_URL, { method: 'POST', headers, body: form });
+            const data = await resp.json();
+            if (!resp.ok) {
+                if (resp.status === 401) {
+                    // clear expired token and update UI
+                    try { localStorage.removeItem('uploadServerToken'); localStorage.removeItem('uploadServerUserKey'); } catch (e) {}
+                    const serverStatus = document.getElementById('serverStatus'); if (serverStatus) serverStatus.textContent = '';
+                    const svLogoutBtn = document.getElementById('svLogoutBtn'); if (svLogoutBtn) svLogoutBtn.style.display = 'none';
+                    if (serverLoginBtn) serverLoginBtn.disabled = false;
+                    throw new Error('Session invalid or expired. Please login again.');
+                }
+                throw new Error(data.error || JSON.stringify(data));
+            }
+            msgEl.textContent = 'Server upload successful.';
+        } catch (err) {
+            msgEl.textContent = 'Server upload failed: ' + (err.message || JSON.stringify(err));
+        } finally {
+            btn.disabled = false;
+        }
+    });
+}
+
+function closeDeviceModal() {
+    const el = document.getElementById('deviceModal');
+    if (el) el.remove();
+}
+
+async function uploadToProxy(blob) {
+    const url = CONFIG.UPLOAD_PROXY_URL;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CONFIG.UPLOAD_TIMEOUT_MS);
+    const form = new FormData();
+    form.append('file', blob, 'route.gpx');
+    try {
+        const resp = await fetch(url, { method: 'POST', body: form, signal: controller.signal });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            let body;
+            try { body = await resp.json(); } catch (e) { body = await resp.text(); }
+            throw new Error('Server error: ' + (body && body.error ? body.error : JSON.stringify(body)));
+        }
+        const data = await resp.json();
+        return data;
+    } catch (err) {
+        if (err.name === 'AbortError') throw new Error('Upload timed out. Is the proxy running? See tools/upload-proxy/README.md');
+        throw err;
+    }
 }
 
 function updateMapMarkers() {
@@ -1534,6 +1812,9 @@ window.addNewWaypoint = addNewWaypoint;
 window.addPointAsStart = addPointAsStart;
 window.addPointAsDestination = addPointAsDestination;
 window.addPointAsWaypoint = addPointAsWaypoint;
+// Expose export helpers for debugging / quick access
+window.exportGPX = exportGPX;
+
 
 document.addEventListener('DOMContentLoaded', () => {
     initializeSearchUI();

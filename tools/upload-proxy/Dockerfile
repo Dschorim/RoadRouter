@@ -9,8 +9,12 @@ RUN apt-get update && apt-get install -y python3 make g++ build-essential --no-i
 
 # copy package files and install production dependencies
 COPY package*.json ./
-# Use `npm ci` with the generated lockfile to ensure reproducible installs
-RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
+# Use `npm ci` with the generated lockfile to ensure reproducible installs.
+# Retry a few times and verify/clean npm cache to mitigate transient registry/tarball integrity errors.
+RUN npm cache verify || npm cache clean --force && \
+    for i in 1 2 3; do \
+        npm ci --omit=dev --no-audit --no-fund && break || (echo "npm ci failed, retrying ($i)" && npm cache clean --force && sleep 1); \
+    done && npm cache clean --force
 
 # copy app sources
 COPY . .

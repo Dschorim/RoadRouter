@@ -247,6 +247,13 @@ html, body {
     transform: translateY(0);
 }
 
+.btn-outline {
+    background: transparent;
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    padding: 8px 12px;
+}
+
 .btn-danger {
     background: transparent;
     color: var(--color-error);
@@ -597,3 +604,32 @@ html, body {
 .leaflet-control-zoom-out:active {
     background: rgba(50, 184, 198, 0.15) !important;
 }
+
+/* Modal styles for Export to Device */
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10050;
+}
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+}
+.modal-content {
+  position: relative;
+  z-index: 10060;
+  width: 480px;
+  max-width: calc(100% - 48px);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: var(--shadow-md);
+}
+.muted { color: var(--color-text-secondary); font-size: 13px; }
