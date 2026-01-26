@@ -1040,7 +1040,7 @@ function openDeviceModal() {
           <button id="downloadGpxBtn" class="btn btn-outline">Download GPX</button>
           <button id="closeDeviceModalBtn" class="btn">Close</button>
         </div>
-        <div id="directUploadForm" style="display:none; margin-top:12px; gap:8px;">
+        <div id="directUploadForm" style="display:none; margin-top:12px; gap:8px; flex-direction:column;">
           <label style="font-size:13px; color:var(--color-text-secondary);">Mapbox Token</label>
           <input id="duMapboxToken" class="search-input" placeholder="pk... (optional)" />
           <label style="font-size:13px; color:var(--color-text-secondary);">OneLapFit Username</label>
@@ -1053,7 +1053,7 @@ function openDeviceModal() {
           </div>
         </div>
 
-        <div id="serverLoginForm" style="display:none; margin-top:12px; gap:8px;">
+        <div id="serverLoginForm" style="display:none; margin-top:12px; gap:8px; flex-direction:column;">
           <label style="font-size:13px; color:var(--color-text-secondary);">Server OneLapFit Username</label>
           <input id="svUsername" class="search-input" placeholder="email or username" />
           <label style="font-size:13px; color:var(--color-text-secondary);">Server OneLapFit Password</label>
