@@ -11,14 +11,13 @@ RUN apt-get update && apt-get install -y python3 make g++ build-essential --no-i
 COPY package*.json ./
 # Use `npm ci` with the generated lockfile to ensure reproducible installs.
 # Retry a few times and verify/clean npm cache to mitigate transient registry/tarball integrity errors.
-RUN npm cache verify || npm cache clean --force && \
+RUN set -e; npm cache verify || npm cache clean --force; \
+    success=0; \
     for i in 1 2 3; do \
-        npm ci --omit=dev --no-audit --no-fund && break || (echo "npm ci failed, retrying ($i)" && npm cache clean --force && sleep 1); \
-    done && npm cache clean --force && \
-    # Debug: list files and attempt to resolve express to diagnose missing-module at runtime
-    echo "=== /usr/src/app contents ===" && ls -la /usr/src/app || true && \
-    echo "=== node_modules listing ===" && ls -la /usr/src/app/node_modules || true && \
-    echo "=== attempt to resolve express module ===" && node -e "try{console.log(require.resolve('express'))}catch(e){console.error('resolve-failed', e.message); process.exit(0)}" || true
+        if npm ci --omit=dev --no-audit --no-fund; then success=1; break; else echo "npm ci failed, retrying ($i)" && npm cache clean --force && sleep 1; fi; \
+    done; \
+    if [ "$success" -ne 1 ]; then echo "ERROR: npm ci failed after 3 attempts" >&2; exit 1; fi; \
+    npm cache clean --force
 
 # copy app sources
 COPY . .
