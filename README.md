@@ -35,7 +35,7 @@ A modern, interactive route planning application. The application uses OSRM (Ope
 - ✅ **Context menu** - Right-click on map (outside route) to set start, destination, or add waypoint
 - ✅ **Route info panel** - Displays total distance and duration
 - ✅ **Export GPX** - Export the current route as a GPX file for import into other services.
-- ✅ **Export to Device (Magene)** - Upload the route directly to a Magene device via the optional local upload proxy (uses the open-source magpx tool). See the "Export to Device" section below for setup.
+
 
 ### Advanced Features
 - ✅ **Drag-and-drop on route** - Click and drag on route line to create and immediately grab new waypoint
@@ -96,7 +96,7 @@ Edit `js/config.js` to customize:
 - `PHOTONAPI` - Photon backend URL
 - `COUNTRYCODES` - Supported country codes
 - `ENABLE_DEBUG_MODE` - Toggle debug visualization
-- `UPLOAD_PROXY_URL` - URL of the optional upload proxy that runs `magpx-js` (default: `http://localhost:3001/api/upload`)
+
 - `UPLOAD_TIMEOUT_MS` - Timeout for proxy uploads in milliseconds
 
 ## How to Use
@@ -119,22 +119,15 @@ Edit `js/config.js` to customize:
 - **Right-click** on empty area to set start, destination, or waypoint
 - **Right-click on route** opens context menu for that segment
 
-### Export to Device (Magene)
-- The app includes an **Export to Device** button that uploads the current route to a Magene device using the OneLapFit workflow implemented by the open-source `magpx` reverse engineering work.
-- For privacy and reliability this works via the **local upload proxy** (`tools/upload-proxy`) that runs on your machine and invokes the local JS importer (`magpx-js`) which performs Mapbox map-matching and the OneLapFit upload.
+### Exporting
+- Use **Export GPX** in the route sidebar to download the current route as a GPX file for import into other tools or devices.
 
-Setup (quick):
-1. Copy `tools/upload-proxy/.magpx.json.example` to `tools/upload-proxy/.magpx.json` and fill in your `username`, `password`, and `mapbox_token`.
-2. Start the proxy: `cd tools/upload-proxy && npm install && npm start` (default listens on port 3001).
-3. Open the app, click **Export to Device**, and choose **Upload via Proxy** or use **Download GPX** to import manually.
 
-Direct Upload (experimental)
-- From the **Export to Device** modal you can choose **Direct Upload (experimental)** which attempts the full Mapbox map-matching and OneLapFit upload directly from your browser (no local proxy required).
-- Requirements: a valid Mapbox token (set `js/config.js` -> `MAPBOX_TOKEN` or enter it in the modal), and your OneLapFit username/password.
-- Caveat: OneLapFit may not allow cross-origin browser requests (CORS). If the server blocks browser requests the direct upload will fail — in that case run the local proxy or use the GPX download/import method.
+
+
 
 Credits
-- The import format and OneLapFit conversion logic are heavily inspired by Jerome Cornet's original `magpx` project: https://github.com/jeromecornet/magpx. Thanks to Jerome for the reverse-engineering work that made this possible.
+
 
 If you prefer not to run the proxy, use **Download GPX** from the modal and import the file manually with your preferred workflow.
 ## Technical Details
