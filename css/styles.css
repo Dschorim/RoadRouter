@@ -383,10 +383,41 @@ html, body {
     background: linear-gradient(135deg, var(--color-waypoint) 0%, var(--color-waypoint-dark) 100%);
 }
 
+/* Preview ring shown when hovering over a route: outer ring colored like the route, inner circle white */
+.map-pin-preview {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--color-primary); /* fill so no transparent gap */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    box-shadow: none;
+
+    /* fade + scale animation */
+    opacity: 0;
+    transform: scale(0.92);
+    transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.map-pin-preview.visible {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.map-pin-preview-inner {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+
 .leaflet-div-icon {
     background: transparent;
     border: none;
-}
+} 
 
 #routeInfo {
     padding: 12px;
@@ -604,5 +635,78 @@ html, body {
 .leaflet-control-zoom-out:active {
     background: rgba(50, 184, 198, 0.15) !important;
 }
+
+/* Elevation card (bottom, full width) */
+.elevation-card {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 170px;
+    background: var(--color-surface);
+    border-top: 1px solid var(--color-border);
+    padding: 12px 24px;
+    z-index: 10050;
+    box-shadow: var(--shadow-md);
+}
+
+.elevation-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.elevation-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    color: var(--color-text-secondary);
+    font-size: 13px;
+}
+
+.elevation-stats {
+    display: flex;
+    gap: 18px;
+    align-items: center;
+}
+
+#elevationCanvas {
+    width: 100%;
+    height: 100px;
+    display: block;
+    background: transparent;
+    cursor: crosshair;
+}
+
+.elevation-tooltip {
+    position: absolute;
+    pointer-events: none;
+    padding: 6px 8px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    font-size: 12px;
+    transform: translate(-50%, -120%);
+    white-space: nowrap;
+}
+
+.elevation-xaxis {
+    margin-top: 6px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+
+.elevation-side-scale {
+    width: 48px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: flex-end;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    padding-right: 8px;
+} 
 
 

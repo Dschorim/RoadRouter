@@ -21,6 +21,7 @@ export const APP = {
     isDraggingMarker: false,
     draggedMarkerStartPos: null,
     lastPreviewTime: 0,
+    previewMarker: null,
     routeClickJustHappened: false,
     lastFocusedInputId: null,
     attachedAutocompleteInputs: new Set()
@@ -751,6 +752,8 @@ async function calculateRoute() {
         if (result.code !== 'Ok') return;
         
         APP.currentRoute = result.routes[0];
+        // Remove any existing preview marker before clearing old route layers
+        removeRoutePreview();
         APP.routeLayer.clearLayers();
         
         if (APP.routeMouseMoveHandler) APP.map.off('mousemove', APP.routeMouseMoveHandler);
@@ -770,18 +773,38 @@ async function calculateRoute() {
         
         updateRouteStyle();
         APP.currentPolyline = routePolyline;
+
+        // show a preview ring when hovering over the route
+        routePolyline.on('mousemove', (e) => {
+            if (APP.routePolylineMouseDown) return;
+            const closest = findClosestPointOnPolyline(e.latlng);
+            if (closest) {
+                createOrUpdateRoutePreview(closest);
+                if (APP.map && APP.map._container) APP.map._container.style.cursor = 'pointer';
+            }
+        });
+
+        routePolyline.on('mouseout', () => {
+            removeRoutePreview();
+            if (APP.map && APP.map._container) APP.map._container.style.cursor = '';
+        });
         
         routePolyline.on('mousedown', (e) => {
             if (e.originalEvent.button !== 0) return;
-            
+            // hide preview when user begins interacting with route
+            removeRoutePreview();
+
             APP.routeClickJustHappened = true;
             setTimeout(() => { APP.routeClickJustHappened = false; }, 150);
-            
-            const latlng = e.latlng;
+
+            // Use expanded hit-area to find a valid closest point (returns null if outside tolerance)
+            const alt = findClosestPointOnPolyline(e.latlng);
+            if (!alt) return; // click not close enough to route
+
+            const latlng = L.latLng(alt.lat, alt.lng);
             const clickPoint = { lat: latlng.lat, lng: latlng.lng };
-            let closestSegmentIndex = 0;
-            let minDistance = Infinity;
-            let polylinePoints = [];
+            let closestSegmentIndex = alt.segmentIndex || 0;
+            let polylinePoints = alt.latlngs || [];
             
             const geoJSONLayers = APP.currentPolyline && APP.currentPolyline._layers ? APP.currentPolyline._layers : {};
             for (let layerId in geoJSONLayers) {
@@ -922,28 +945,25 @@ async function calculateRoute() {
 
         const distance = APP.currentRoute.distance;
         const duration = APP.currentRoute.duration;
-        document.getElementById('routeInfo').innerHTML = `
-            <div class="route-info">
-                <h3>Route ${debugMode ? '(Debug Mode)' : 'Ready'}</h3>
-                <div class="route-stats">
-                    <div class="stat">
-                        <span class="stat-label">Distance</span>
-                        <span class="stat-value">${formatDistance(distance)}</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-label">Duration</span>
-                        <span class="stat-value">${formatDuration(duration)}</span>
-                    </div>
-                </div>
-                <div class="route-actions" style="margin-top:12px; display:flex; gap:8px;">
-                    <button id="exportGpxBtn" class="btn btn-primary">Export GPX</button>
-                </div>
-            </div>
-        `;
 
-        // wire buttons
-        const gpxBtn = document.getElementById('exportGpxBtn');
-        if (gpxBtn) gpxBtn.addEventListener('click', () => exportGPX());
+        // Show elevation card and place distance/duration values there
+        const elevCard = document.getElementById('elevationCard');
+        if (elevCard) elevCard.style.display = 'block';
+        const sideScale = document.getElementById('elevationSideScale');
+        if (sideScale) sideScale.style.display = 'flex';
+
+        // Set header values (will be updated after elevation fetch with gain/loss)
+        const distEl = document.getElementById('elev-distance-val');
+        const durEl = document.getElementById('elev-duration-val');
+        if (distEl) distEl.textContent = formatDistance(distance);
+        if (durEl) durEl.textContent = formatDuration(duration);
+
+        // wire header GPX button
+        const headerGpxBtn = document.getElementById('exportGpxHeaderBtn');
+        if (headerGpxBtn) headerGpxBtn.addEventListener('click', () => exportGPX());
+
+        // fetch elevation and render profile
+        fetchAndRenderElevation();
 
         if (debugMode) {
             // Debug mode is handled by the tile layer
@@ -958,14 +978,141 @@ function distanceToLineSegment(point, lineStart, lineEnd) {
     const dy = lineEnd.lat - lineStart.lat;
     let t = ((point.lng - lineStart.lng) * dx + (point.lat - lineStart.lat) * dy) / (dx * dx + dy * dy);
     t = Math.max(0, Math.min(1, t));
-    
+
     const closestX = lineStart.lng + t * dx;
     const closestY = lineStart.lat + t * dy;
-    
+
     const ddx = point.lng - closestX;
     const ddy = point.lat - closestY;
-    
+
     return Math.sqrt(ddx * ddx + ddy * ddy);
+}
+
+// Find the closest point on the current polyline to a given latlng
+function findClosestPointOnPolyline(latlng) {
+    if (!APP.currentPolyline || !APP.map) return null;
+    const clickPoint = { lat: latlng.lat, lng: latlng.lng };
+    const clickPixel = APP.map.latLngToLayerPoint([latlng.lat, latlng.lng]);
+
+    let minPixelDist = Infinity;
+    let closest = null;
+    let chosenLatLngs = null;
+    let chosenIndex = 0;
+
+    const geoJSONLayers = APP.currentPolyline._layers || {};
+
+    // determine route visual weight (fallback to 5)
+    let routeWeight = 5;
+    for (let lid in geoJSONLayers) {
+        const layer = geoJSONLayers[lid];
+        if (layer && layer.options && layer.options.weight) {
+            routeWeight = layer.options.weight;
+            break;
+        }
+    }
+
+    const thresholdPx = routeWeight * 3; // 3x route width
+
+    for (let layerId in geoJSONLayers) {
+        const layer = geoJSONLayers[layerId];
+        if (layer.getLatLngs && typeof layer.getLatLngs === 'function') {
+            const latlngs = layer.getLatLngs();
+            if (!latlngs || latlngs.length === 0) continue;
+
+            for (let i = 0; i < latlngs.length - 1; i++) {
+                const a = latlngs[i];
+                const b = latlngs[i + 1];
+                const dx = b.lng - a.lng;
+                const dy = b.lat - a.lat;
+                const denom = (dx * dx + dy * dy);
+                if (denom === 0) continue;
+
+                const t = ((clickPoint.lng - a.lng) * dx + (clickPoint.lat - a.lat) * dy) / denom;
+                const tt = Math.max(0, Math.min(1, t));
+                const cx = a.lng + tt * dx;
+                const cy = a.lat + tt * dy;
+
+                // Convert candidate point to pixel space and measure distance
+                const candidatePixel = APP.map.latLngToLayerPoint([cy, cx]);
+                const pdx = clickPixel.x - candidatePixel.x;
+                const pdy = clickPixel.y - candidatePixel.y;
+                const pixelDist = Math.sqrt(pdx * pdx + pdy * pdy);
+
+                if (pixelDist < minPixelDist) {
+                    minPixelDist = pixelDist;
+                    closest = { lat: cy, lng: cx, dist: Math.sqrt(Math.pow(clickPoint.lng - cx, 2) + Math.pow(clickPoint.lat - cy, 2)), pixelDist };
+                    chosenLatLngs = latlngs;
+                    chosenIndex = i;
+                }
+            }
+        }
+    }
+
+    // only return closest if within threshold in pixels
+    if (closest && minPixelDist <= thresholdPx) {
+        closest.segmentIndex = chosenIndex;
+        closest.latlngs = chosenLatLngs;
+        return closest;
+    }
+
+    return null;
+}
+
+// Create or update the preview marker (a ring with white inner circle)
+function createOrUpdateRoutePreview(point) {
+    if (!point) return;
+    if (!APP.markerLayer) return;
+
+    const html = `<div class="map-pin-preview"><div class="map-pin-preview-inner"></div></div>`;
+
+    if (!APP.previewMarker) {
+        const icon = L.divIcon({
+            html,
+            className: 'leaflet-div-icon',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+        });
+        APP.previewMarker = L.marker([point.lat, point.lng], { icon, interactive: false, bubblingMouseEvents: false }).addTo(APP.markerLayer);
+
+        // ensure fade-in after element is created - add class to inner element
+        const el = APP.previewMarker.getElement && APP.previewMarker.getElement();
+        if (el) {
+            const inner = el.querySelector && el.querySelector('.map-pin-preview');
+            if (inner) {
+                inner.classList.remove('visible');
+                // small timeout to ensure transition from hidden -> visible
+                setTimeout(() => inner.classList.add('visible'), 20);
+            }
+        }
+    } else {
+        APP.previewMarker.setLatLng([point.lat, point.lng]);
+        const el = APP.previewMarker.getElement && APP.previewMarker.getElement();
+        if (el) {
+            const inner = el.querySelector && el.querySelector('.map-pin-preview');
+            if (inner && !inner.classList.contains('visible')) {
+                setTimeout(() => inner.classList.add('visible'), 20);
+            }
+        }
+    }
+}
+
+function removeRoutePreview() {
+    if (APP.previewMarker && APP.markerLayer) {
+        const el = APP.previewMarker.getElement && APP.previewMarker.getElement();
+        const inner = el && el.querySelector ? el.querySelector('.map-pin-preview') : null;
+        if (inner && inner.classList.contains('visible')) {
+            // remove visible class to start fade-out
+            inner.classList.remove('visible');
+            // remove marker after transition completes
+            setTimeout(() => {
+                try { APP.markerLayer.removeLayer(APP.previewMarker); } catch (e) {}
+                APP.previewMarker = null;
+            }, 120);
+        } else {
+            try { APP.markerLayer.removeLayer(APP.previewMarker); } catch (e) {}
+            APP.previewMarker = null;
+        }
+    }
 }
 
 // ==================== GPX EXPORT HELPERS ====================
@@ -1017,6 +1164,247 @@ function exportGPX(filename = 'route.gpx') {
 
 
 
+
+// ------------------ Elevation helpers & profile rendering ------------------
+
+// Haversine distance (meters)
+function haversineDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371000; // meters
+    const toRad = Math.PI / 180;
+    const dLat = (lat2 - lat1) * toRad;
+    const dLon = (lon2 - lon1) * toRad;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1*toRad)*Math.cos(lat2*toRad)*Math.sin(dLon/2)*Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+}
+
+// Sample route coordinates at approximately intervalMeters along the route
+function sampleRouteCoordinates(coords, intervalMeters = 50) {
+    if (!coords || coords.length === 0) return [];
+    const samples = [];
+
+    let acc = 0; // distance along current segment
+    for (let i = 0; i < coords.length - 1; i++) {
+        const [lon1, lat1] = coords[i];
+        const [lon2, lat2] = coords[i + 1];
+        const segLen = haversineDistance(lat1, lon1, lat2, lon2);
+        if (samples.length === 0) samples.push({lat: lat1, lng: lon1, d: 0});
+
+        let t = 0;
+        while (t < segLen) {
+            const nextT = Math.min(intervalMeters - acc, segLen - t);
+            t += nextT;
+            acc += nextT;
+            if (acc >= intervalMeters) {
+                const fraction = t / segLen;
+                const lat = lat1 + (lat2 - lat1) * fraction;
+                const lng = lon1 + (lon2 - lon1) * fraction;
+                samples.push({lat, lng, d: 0});
+                acc = 0;
+            }
+        }
+    }
+
+    // ensure last point included
+    const last = coords[coords.length - 1];
+    if (last) samples.push({lat: last[1], lng: last[0], d: 0});
+
+    // compute cumulative distances
+    let cum = 0;
+    for (let i = 0; i < samples.length; i++) {
+        if (i === 0) samples[i].d = 0;
+        else {
+            cum += haversineDistance(samples[i-1].lat, samples[i-1].lng, samples[i].lat, samples[i].lng);
+            samples[i].d = cum;
+        }
+    }
+
+    return samples;
+}
+
+// Fetch elevation values from the configured elevation API
+async function fetchElevations(points) {
+    if (!CONFIG.ELEVATIONAPI || !points || points.length === 0) return null;
+
+    try {
+        // Open-Elevation compatible POST
+        const locations = points.map(p => ({latitude: p.lat, longitude: p.lng}));
+        const res = await fetch(`${CONFIG.ELEVATIONAPI}/api/v1/lookup`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ locations })
+        });
+        if (!res.ok) return null;
+        const json = await res.json();
+        if (!json || !json.results) return null;
+        return json.results.map((r, idx) => ({ lat: r.latitude, lng: r.longitude, elev: r.elevation, d: points[idx].d }));
+    } catch (e) {
+        console.error('Elevation fetch failed:', e);
+        return null;
+    }
+}
+
+function computeGainLoss(elevArray) {
+    let gain = 0, loss = 0;
+    for (let i = 1; i < elevArray.length; i++) {
+        const diff = elevArray[i].elev - elevArray[i-1].elev;
+        if (diff > 0) gain += diff; else loss += -diff;
+    }
+    return { gain: Math.round(gain), loss: Math.round(loss) };
+}
+
+async function fetchAndRenderElevation() {
+    if (!APP.currentRoute || !APP.currentRoute.geometry || !APP.currentRoute.geometry.coordinates) return;
+    const coords = APP.currentRoute.geometry.coordinates; // [lon, lat]
+    const samples = sampleRouteCoordinates(coords, 50); // ~50m samples
+    if (!samples || samples.length === 0) return;
+
+    const elevRes = await fetchElevations(samples);
+    if (!elevRes) {
+        // hide elevation card if fetch fails
+        const elevCard = document.getElementById('elevationCard');
+        if (elevCard) elevCard.style.display = 'none';
+        return;
+    }
+
+    APP.elevationData = elevRes;
+
+    const { gain, loss } = computeGainLoss(elevRes);
+    const gainEl = document.getElementById('elev-gain-val');
+    const lossEl = document.getElementById('elev-loss-val');
+    if (gainEl) gainEl.textContent = `${gain} m`;
+    if (lossEl) lossEl.textContent = `${loss} m`;
+
+    renderElevationProfile(elevRes);
+}
+
+function renderElevationProfile(data) {
+    const canvas = document.getElementById('elevationCanvas');
+    const tooltip = document.getElementById('elevationTooltip');
+    if (!canvas || !data || data.length === 0) return;
+
+    // set internal canvas size for crisp rendering
+    const parent = canvas.parentElement || canvas;
+    const width = parent.clientWidth;
+    const height = 100;
+    canvas.width = Math.round(width * devicePixelRatio);
+    canvas.height = Math.round(height * devicePixelRatio);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+    ctx.clearRect(0, 0, width, height);
+
+    const elevations = data.map(d => d.elev);
+    const minE = Math.min(...elevations);
+    const maxE = Math.max(...elevations);
+    const pad = 8;
+
+    // Draw filled curve
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+        const x = (i / (data.length - 1)) * (width - pad*2) + pad;
+        const y = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * (height - pad*2);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.lineTo(width - pad, height - pad);
+    ctx.lineTo(pad, height - pad);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(50,184,198,0.12)';
+    ctx.fill();
+
+    // stroke line
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+        const x = (i / (data.length - 1)) * (width - pad*2) + pad;
+        const y = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * (height - pad*2);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--color-primary') || '#32b8c6';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // draw horizontal markers (start/mid/end)
+    const xAxis = document.getElementById('elevationXAxis');
+    if (xAxis) {
+        const totalKm = (data[data.length - 1].d / 1000);
+        xAxis.innerHTML = `<div>0 km</div><div>${totalKm.toFixed(1)} km</div>`;
+    }
+
+    // draw side scale (min/max) in the sidebar
+    const sideScale = document.getElementById('elevationSideScale');
+    if (sideScale) {
+        sideScale.innerHTML = `<div>${Math.round(maxE)} m</div><div style="opacity:0.6">${Math.round((maxE+minE)/2)} m</div><div>${Math.round(minE)} m</div>`;
+    }
+
+    // attach mouse events
+    canvas.onmousemove = function(evt) {
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = (evt.clientX - rect.left);
+        const rel = Math.max(0, Math.min(1, (mouseX - pad) / (width - pad*2)));
+        const idx = Math.round(rel * (data.length - 1));
+        const point = data[idx];
+        if (!point) return;
+
+        // position tooltip
+        if (tooltip) {
+            tooltip.style.display = 'block';
+            tooltip.style.left = (rect.left + (mouseX)) + 'px';
+            tooltip.textContent = `${(point.d/1000).toFixed(2)} km — ${Math.round(point.elev)} m`;
+        }
+
+        // draw vertical line overlay on canvas
+        ctx.clearRect(0, 0, width, height);
+        // redraw curve (simple, could be optimized)
+        // filled
+        ctx.beginPath();
+        for (let i = 0; i < data.length; i++) {
+            const x = (i / (data.length - 1)) * (width - pad*2) + pad;
+            const y = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * (height - pad*2);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.lineTo(width - pad, height - pad);
+        ctx.lineTo(pad, height - pad);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(50,184,198,0.12)';
+        ctx.fill();
+        // stroke
+        ctx.beginPath();
+        for (let i = 0; i < data.length; i++) {
+            const x = (i / (data.length - 1)) * (width - pad*2) + pad;
+            const y = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * (height - pad*2);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--color-primary') || '#32b8c6';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // vertical line
+        ctx.beginPath();
+        const vx = (idx / (data.length - 1)) * (width - pad*2) + pad;
+        ctx.moveTo(vx, pad);
+        ctx.lineTo(vx, height - pad);
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // update map preview at this point
+        createOrUpdateRoutePreview(point);
+    };
+
+    canvas.onmouseleave = function() {
+        const tooltip = document.getElementById('elevationTooltip');
+        if (tooltip) tooltip.style.display = 'none';
+        // remove preview marker on mouseout
+        removeRoutePreview();
+        // re-render the static curve
+        renderElevationProfile(data);
+    };
+
+}
+
+// ------------------ End elevation helpers ------------------
 
 function updateMapMarkers() {
     if (!APP.markerLayer) return;
@@ -1100,37 +1488,9 @@ function updateMapMarkers() {
 }
 
 function isClickOnRoute(latlng) {
-    if (!APP.currentPolyline) {
-        return false;
-    }
-    
-    const clickPoint = { lat: latlng.lat, lng: latlng.lng };
-    const tolerance = 0.00005;
-    
-    const geoJSONLayers = APP.currentPolyline._layers;
-    
-    for (let layerId in geoJSONLayers) {
-        const layer = geoJSONLayers[layerId];
-        
-        if (layer.getLatLngs && typeof layer.getLatLngs === 'function') {
-            const latlngs = layer.getLatLngs();
-            
-            if (latlngs && latlngs.length > 0) {
-                for (let i = 0; i < latlngs.length - 1; i++) {
-                    const dist = distanceToLineSegment(
-                        clickPoint,
-                        latlngs[i],
-                        latlngs[i + 1]
-                    );
-                    
-                    if (dist < tolerance) {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    return false;
+    // Use the same expanded hit-area logic as hover/preview
+    const closest = findClosestPointOnPolyline(latlng);
+    return !!closest;
 }
 
 function handleRightClick(e) {

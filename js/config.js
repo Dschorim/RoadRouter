@@ -4,6 +4,7 @@ const CONFIG = {
     MAPZOOM: 7,
     OSRMAPI: 'http://localhost:5000',
     PHOTONAPI: 'http://localhost:2322',
+    ELEVATIONAPI: 'http://localhost:5002',
     COUNTRYCODES: '', // Optional; the available area is determined by the OSRM backend PBF
 
     UPLOAD_TIMEOUT_MS: 60_000,
