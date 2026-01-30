@@ -57,9 +57,28 @@ html, body {
     cursor: default;
 }
 
+/* Elevation card (floating, like sidebar) */
+.elevation-card {
+    position: fixed;
+    left: 24px;
+    right: 24px;
+    bottom: 24px;
+    height: auto;
+    min-height: 170px;
+    max-height: 200px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    padding: 12px 24px 16px;
+    z-index: 10050;
+    box-shadow: var(--shadow-md);
+    backdrop-filter: blur(8px);
+    box-sizing: border-box;
+}
+
 .sidebar-card {
     width: 380px;
-    max-height: 70vh;
+    max-height: calc(100vh - 242px - 24px); /* viewport - top(24) - gap(24) - elevation(170) - bottom(24) - extra gap(24) */
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 16px;
@@ -72,6 +91,17 @@ html, body {
     top: 24px;
     left: 24px;
     margin: 0;
+    transition: all 200ms ease;
+}
+
+.sidebar-card.drag-active {
+    border: 2px dashed var(--color-primary);
+    background: rgba(35, 26, 26, 0.95);
+}
+
+.sidebar-card.drag-active > *:not(#dropIndicator) {
+    filter: blur(3px);
+    pointer-events: none;
 }
 
 .card-header {
@@ -464,9 +494,17 @@ html, body {
 @media (max-width: 768px) {
     .sidebar-card {
         width: calc(100vw - 48px);
+        max-height: 40vh;
         top: 12px;
         left: 12px;
         right: 12px;
+    }
+    
+    .elevation-card {
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+        height: 140px;
     }
     
     .leaflet-top {
@@ -636,23 +674,30 @@ html, body {
     background: rgba(50, 184, 198, 0.15) !important;
 }
 
-/* Elevation card (bottom, full width) */
+/* Elevation card (floating, like sidebar) */
 .elevation-card {
     position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 170px;
+    left: 24px;
+    right: 24px;
+    bottom: 24px;
+    height: auto;
+    min-height: 170px;
+    max-height: 200px;
     background: var(--color-surface);
-    border-top: 1px solid var(--color-border);
-    padding: 12px 24px;
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    padding: 12px 24px 16px;
     z-index: 10050;
     box-shadow: var(--shadow-md);
+    backdrop-filter: blur(8px);
+    box-sizing: border-box;
 }
 
 .elevation-inner {
-    max-width: 1200px;
-    margin: 0 auto;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
 }
 
 .elevation-header {
@@ -672,30 +717,35 @@ html, body {
 
 #elevationCanvas {
     width: 100%;
-    height: 100px;
+    height: 90px;
     display: block;
     background: transparent;
     cursor: crosshair;
+    flex-shrink: 0;
 }
 
 .elevation-tooltip {
-    position: absolute;
+    position: fixed !important;
     pointer-events: none;
     padding: 6px 8px;
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
+    background: rgba(26, 35, 50, 0.95) !important;
+    border: 1px solid var(--color-border) !important;
     border-radius: 6px;
     font-size: 12px;
-    transform: translate(-50%, -120%);
     white-space: nowrap;
+    z-index: 100000 !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+    color: white !important;
+    opacity: 1 !important;
 }
 
 .elevation-xaxis {
-    margin-top: 6px;
+    margin-top: 4px;
     display: flex;
     justify-content: space-between;
     font-size: 12px;
     color: var(--color-text-secondary);
+    flex-shrink: 0;
 }
 
 .elevation-side-scale {

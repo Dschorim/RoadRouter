@@ -2,9 +2,9 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-COPY index.html ./
-COPY css ./css
-COPY js ./js
+COPY frontend/index.html ./
+COPY frontend/css ./css
+COPY frontend/js ./js
 
 EXPOSE 3000
 

@@ -31,6 +31,7 @@ import { attachAutocompleteToInput } from './modules/autocomplete.js';
 import { reverseGeocodeWithRateLimit } from './geocoding.js';
 import { formatDistance, formatDuration } from './utils.js';
 import CONFIG from './config.js';
+import { initialize as initElevation, getElevations } from './elevation.js';
 
 
 // ==================== DEBUG MODE WITH OSRM TILE SERVICE ====================
@@ -737,7 +738,6 @@ async function calculateRoute() {
     if (validPoints.length < 2) {
         APP.routeLayer.clearLayers();
         APP.currentPolyline = null;
-        document.getElementById('routeInfo').innerHTML = '';
         return;
     }
 
@@ -780,12 +780,20 @@ async function calculateRoute() {
             const closest = findClosestPointOnPolyline(e.latlng);
             if (closest) {
                 createOrUpdateRoutePreview(closest);
+                // Also draw vertical line on elevation chart
+                if (APP.elevationData && APP.elevationData.length > 0) {
+                    drawElevationCursor(closest);
+                }
                 if (APP.map && APP.map._container) APP.map._container.style.cursor = 'pointer';
             }
         });
 
         routePolyline.on('mouseout', () => {
             removeRoutePreview();
+            // Clear elevation cursor
+            if (APP.elevationData) {
+                renderElevationProfile(APP.elevationData);
+            }
             if (APP.map && APP.map._container) APP.map._container.style.cursor = '';
         });
         
@@ -805,6 +813,7 @@ async function calculateRoute() {
             const clickPoint = { lat: latlng.lat, lng: latlng.lng };
             let closestSegmentIndex = alt.segmentIndex || 0;
             let polylinePoints = alt.latlngs || [];
+            let minDistance = Infinity;
             
             const geoJSONLayers = APP.currentPolyline && APP.currentPolyline._layers ? APP.currentPolyline._layers : {};
             for (let layerId in geoJSONLayers) {
@@ -822,6 +831,10 @@ async function calculateRoute() {
                 }
             }
             
+            // Find which route segment the click is closest to
+            // We need to find the closest point on the route line, then determine
+            // which two waypoints that point lies between
+            
             const validIndices = [];
             APP.routePoints.forEach((p, idx) => {
                 if (p.lat !== null && p.lng !== null) {
@@ -829,41 +842,30 @@ async function calculateRoute() {
                 }
             });
             
-            let closestWaypointIndex = 0;
-            let closestWaypointDist = Infinity;
+            // Find the segment that the click is closest to
+            // by checking distance to each segment between consecutive waypoints
+            let closestSegmentIdx = 0;
+            let closestSegmentDist = Infinity;
             
-            for (let i = 0; i < validIndices.length; i++) {
-                const routeIdx = validIndices[i];
-                const routePt = APP.routePoints[routeIdx];
-                const dist = Math.sqrt(
-                    Math.pow(routePt.lng - clickPoint.lng, 2) + 
-                    Math.pow(routePt.lat - clickPoint.lat, 2)
+            for (let i = 0; i < validIndices.length - 1; i++) {
+                const startPt = APP.routePoints[validIndices[i]];
+                const endPt = APP.routePoints[validIndices[i + 1]];
+                
+                // Calculate distance from click to this segment
+                const dist = distanceToLineSegment(clickPoint,
+                    { lat: startPt.lat, lng: startPt.lng },
+                    { lat: endPt.lat, lng: endPt.lng }
                 );
                 
-                if (dist < closestWaypointDist) {
-                    closestWaypointDist = dist;
-                    closestWaypointIndex = i;
+                if (dist < closestSegmentDist) {
+                    closestSegmentDist = dist;
+                    closestSegmentIdx = i;
                 }
             }
             
-            if (closestWaypointIndex < validIndices.length - 1) {
-                const nextRoutePt = APP.routePoints[validIndices[closestWaypointIndex + 1]];
-                const nextDist = Math.sqrt(
-                    Math.pow(nextRoutePt.lng - clickPoint.lng, 2) + 
-                    Math.pow(nextRoutePt.lat - clickPoint.lat, 2)
-                );
-                
-                if (nextDist < closestWaypointDist) {
-                    closestWaypointIndex++;
-                }
-            }
-            
-            let insertIndex;
-            if (closestWaypointIndex === 0) {
-                insertIndex = 1;
-            } else {
-                insertIndex = validIndices[closestWaypointIndex];
-            }
+            // Insert AFTER the first waypoint of the closest segment
+            // This ensures the new point gets the correct sequential number
+            const insertIndex = validIndices[closestSegmentIdx] + 1;
             
             const newPoint = {
                 id: APP.nextPointId++,
@@ -957,10 +959,6 @@ async function calculateRoute() {
         const durEl = document.getElementById('elev-duration-val');
         if (distEl) distEl.textContent = formatDistance(distance);
         if (durEl) durEl.textContent = formatDuration(duration);
-
-        // wire header GPX button
-        const headerGpxBtn = document.getElementById('exportGpxHeaderBtn');
-        if (headerGpxBtn) headerGpxBtn.addEventListener('click', () => exportGPX());
 
         // fetch elevation and render profile
         fetchAndRenderElevation();
@@ -1140,6 +1138,98 @@ function generateGPX(name = 'Route') {
     return gpx;
 }
 
+function importGPX() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.gpx';
+    input.onchange = (e) => {
+        const file = e.target.files[0];
+        if (file && file.name.toLowerCase().endsWith('.gpx')) {
+            parseGPXFile(file);
+        }
+    };
+    input.click();
+}
+
+function parseGPXFile(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const parser = new DOMParser();
+            const gpx = parser.parseFromString(e.target.result, 'text/xml');
+            const trkpts = gpx.querySelectorAll('trkpt');
+            
+            if (trkpts.length === 0) {
+                alert('No track points found in GPX file');
+                return;
+            }
+            
+            // Clear existing route
+            APP.routePoints = [];
+            APP.nextPointId = 1;
+            
+            // Add start point
+            const first = trkpts[0];
+            const startPoint = {
+                id: APP.nextPointId++,
+                lat: parseFloat(first.getAttribute('lat')),
+                lng: parseFloat(first.getAttribute('lon')),
+                address: 'Locating...',
+                type: 'start'
+            };
+            APP.routePoints.push(startPoint);
+            
+            // Add waypoints (sample every ~10% of points to avoid too many)
+            const step = Math.max(1, Math.floor(trkpts.length / 10));
+            for (let i = step; i < trkpts.length - step; i += step) {
+                const pt = trkpts[i];
+                APP.routePoints.push({
+                    id: APP.nextPointId++,
+                    lat: parseFloat(pt.getAttribute('lat')),
+                    lng: parseFloat(pt.getAttribute('lon')),
+                    address: 'Locating...',
+                    type: 'waypoint'
+                });
+            }
+            
+            // Add end point
+            const last = trkpts[trkpts.length - 1];
+            const endPoint = {
+                id: APP.nextPointId++,
+                lat: parseFloat(last.getAttribute('lat')),
+                lng: parseFloat(last.getAttribute('lon')),
+                address: 'Locating...',
+                type: 'dest'
+            };
+            APP.routePoints.push(endPoint);
+            
+            updatePointTypes();
+            renderRoutePoints();
+            updateMapMarkers();
+            showRouteContent();
+            debouncedCalculateRoute();
+            
+            // Center map on route
+            const bounds = L.latLngBounds(APP.routePoints.map(p => [p.lat, p.lng]));
+            APP.map.fitBounds(bounds, { padding: [20, 20] });
+            
+            // Reverse geocode all points
+            APP.routePoints.forEach(point => {
+                reverseGeocodeWithRateLimit(point.lat, point.lng).then(address => {
+                    point.address = address;
+                    const input = document.getElementById(`input-${point.id}`);
+                    if (input) input.value = address;
+                    renderRoutePoints();
+                });
+            });
+            
+        } catch (error) {
+            alert('Error parsing GPX file: ' + error.message);
+        }
+    };
+    reader.readAsText(file);
+}
+
 function exportGPX(filename = 'route.gpx') {
     // generate coords and ensure there is something to export
     const coordsExist = (APP.currentRoute && APP.currentRoute.geometry && Array.isArray(APP.currentRoute.geometry.coordinates) && APP.currentRoute.geometry.coordinates.length > 0) ||
@@ -1178,12 +1268,12 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
-// Sample route coordinates at approximately intervalMeters along the route
+// Sample route coordinates progressively - start coarse, refine over time
 function sampleRouteCoordinates(coords, intervalMeters = 50) {
     if (!coords || coords.length === 0) return [];
     const samples = [];
 
-    let acc = 0; // distance along current segment
+    let acc = 0;
     for (let i = 0; i < coords.length - 1; i++) {
         const [lon1, lat1] = coords[i];
         const [lon2, lat2] = coords[i + 1];
@@ -1205,7 +1295,6 @@ function sampleRouteCoordinates(coords, intervalMeters = 50) {
         }
     }
 
-    // ensure last point included
     const last = coords[coords.length - 1];
     if (last) samples.push({lat: last[1], lng: last[0], d: 0});
 
@@ -1222,46 +1311,218 @@ function sampleRouteCoordinates(coords, intervalMeters = 50) {
     return samples;
 }
 
-// Fetch elevation values from the configured elevation API
+// Progressive elevation fetching
+async function fetchElevationsProgressive(points, onProgress) {
+    if (!points || points.length === 0) return [];
+    
+    // Start with sparse sampling (every 8th point)
+    const indices = [0, points.length - 1]; // Always include start and end
+    const results = new Array(points.length).fill(null);
+    
+    // Fetch initial sparse points
+    const initialIndices = [];
+    for (let i = 0; i < points.length; i += 8) {
+        initialIndices.push(i);
+    }
+    if (!initialIndices.includes(points.length - 1)) {
+        initialIndices.push(points.length - 1);
+    }
+    
+    const initialPoints = initialIndices.map(i => points[i]);
+    const initialElevations = await fetchElevations(initialPoints);
+    
+    initialIndices.forEach((idx, i) => {
+        results[idx] = initialElevations[i];
+    });
+    
+    // Interpolate missing points
+    for (let i = 0; i < results.length; i++) {
+        if (results[i] === null) {
+            // Find surrounding known points
+            let prevIdx = i - 1;
+            while (prevIdx >= 0 && results[prevIdx] === null) prevIdx--;
+            let nextIdx = i + 1;
+            while (nextIdx < results.length && results[nextIdx] === null) nextIdx++;
+            
+            if (prevIdx >= 0 && nextIdx < results.length) {
+                const t = (i - prevIdx) / (nextIdx - prevIdx);
+                results[i] = {
+                    lat: points[i].lat,
+                    lng: points[i].lng,
+                    elev: results[prevIdx].elev + (results[nextIdx].elev - results[prevIdx].elev) * t,
+                    d: points[i].d
+                };
+            }
+        }
+    }
+    
+    if (onProgress) onProgress(results);
+    
+    // Progressively refine - fetch midpoints
+    const refineLevels = [4, 2, 1];
+    for (const step of refineLevels) {
+        const refineIndices = [];
+        for (let i = step; i < points.length; i += step * 2) {
+            if (results[i] && results[i].elev !== undefined && !initialIndices.includes(i)) {
+                continue; // Already have real data
+            }
+            refineIndices.push(i);
+        }
+        
+        if (refineIndices.length > 0) {
+            const refinePoints = refineIndices.map(i => points[i]);
+            const refineElevations = await fetchElevations(refinePoints);
+            
+            refineIndices.forEach((idx, i) => {
+                results[idx] = refineElevations[i];
+            });
+            
+            // Re-interpolate gaps
+            for (let i = 0; i < results.length; i++) {
+                if (!results[i] || results[i].elev === undefined) {
+                    let prevIdx = i - 1;
+                    while (prevIdx >= 0 && (!results[prevIdx] || results[prevIdx].elev === undefined)) prevIdx--;
+                    let nextIdx = i + 1;
+                    while (nextIdx < results.length && (!results[nextIdx] || results[nextIdx].elev === undefined)) nextIdx++;
+                    
+                    if (prevIdx >= 0 && nextIdx < results.length) {
+                        const t = (i - prevIdx) / (nextIdx - prevIdx);
+                        results[i] = {
+                            lat: points[i].lat,
+                            lng: points[i].lng,
+                            elev: results[prevIdx].elev + (results[nextIdx].elev - results[prevIdx].elev) * t,
+                            d: points[i].d
+                        };
+                    }
+                }
+            }
+            
+            if (onProgress) onProgress(results);
+        }
+    }
+    
+    return results;
+}
+
+// Fetch elevation values from either TIFF files or the configured elevation API
 async function fetchElevations(points) {
-    if (!CONFIG.ELEVATIONAPI || !points || points.length === 0) return null;
+    if (!points || points.length === 0) {
+        return null;
+    }
+
+    // Use TIFF-based elevation if configured
+    if (CONFIG.ELEVATION_SOURCE === 'tiff') {
+        try {
+            const results = await getElevations(points);
+            return results;
+        } catch (e) {
+            console.error('[Elevation] TIFF lookup failed:', e);
+            return null;
+        }
+    }
+
+    // Fall back to API-based elevation
+    if (!CONFIG.ELEVATIONAPI) {
+        return null;
+    }
 
     try {
         // Open-Elevation compatible POST
         const locations = points.map(p => ({latitude: p.lat, longitude: p.lng}));
-        const res = await fetch(`${CONFIG.ELEVATIONAPI}/api/v1/lookup`, {
+
+        const url = `${CONFIG.ELEVATIONAPI}/api/v1/lookup`;
+
+        const res = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ locations })
         });
-        if (!res.ok) return null;
+
+        if (!res.ok) {
+            console.error('[Elevation] Response not OK:', res.status, res.statusText);
+            return null;
+        }
+
         const json = await res.json();
-        if (!json || !json.results) return null;
-        return json.results.map((r, idx) => ({ lat: r.latitude, lng: r.longitude, elev: r.elevation, d: points[idx].d }));
+
+        if (!json || !json.results) {
+            console.error('[Elevation] Invalid response - missing results:', json);
+            return null;
+        }
+
+        const results = json.results.map((r, idx) => ({ lat: r.latitude, lng: r.longitude, elev: r.elevation, d: points[idx].d }));
+
+        return results;
     } catch (e) {
-        console.error('Elevation fetch failed:', e);
+        console.error('[Elevation] Fetch failed with error:', e);
         return null;
     }
 }
 
 function computeGainLoss(elevArray) {
-    let gain = 0, loss = 0;
-    for (let i = 1; i < elevArray.length; i++) {
-        const diff = elevArray[i].elev - elevArray[i-1].elev;
-        if (diff > 0) gain += diff; else loss += -diff;
+    if (elevArray.length < 3) return { gain: 0, loss: 0 };
+    
+    // Apply moving average smoothing (window size 5)
+    const smoothed = [];
+    const windowSize = 5;
+    
+    for (let i = 0; i < elevArray.length; i++) {
+        let sum = 0, count = 0;
+        const start = Math.max(0, i - Math.floor(windowSize / 2));
+        const end = Math.min(elevArray.length - 1, i + Math.floor(windowSize / 2));
+        
+        for (let j = start; j <= end; j++) {
+            sum += elevArray[j].elev;
+            count++;
+        }
+        
+        smoothed.push({ ...elevArray[i], elev: sum / count });
     }
+    
+    // Calculate gain/loss with 3m threshold on smoothed data
+    const THRESHOLD = 3;
+    let gain = 0, loss = 0;
+    let lastElev = smoothed[0].elev;
+    
+    for (let i = 1; i < smoothed.length; i++) {
+        const diff = smoothed[i].elev - lastElev;
+        
+        if (Math.abs(diff) >= THRESHOLD) {
+            if (diff > 0) {
+                gain += diff;
+            } else {
+                loss += -diff;
+            }
+            lastElev = smoothed[i].elev;
+        }
+    }
+    
     return { gain: Math.round(gain), loss: Math.round(loss) };
 }
-
 async function fetchAndRenderElevation() {
-    if (!APP.currentRoute || !APP.currentRoute.geometry || !APP.currentRoute.geometry.coordinates) return;
-    const coords = APP.currentRoute.geometry.coordinates; // [lon, lat]
-    const samples = sampleRouteCoordinates(coords, 50); // ~50m samples
-    if (!samples || samples.length === 0) return;
+    if (!APP.currentRoute || !APP.currentRoute.geometry || !APP.currentRoute.geometry.coordinates) {
+        return;
+    }
 
-    const elevRes = await fetchElevations(samples);
+    const coords = APP.currentRoute.geometry.coordinates;
+
+    const samples = sampleRouteCoordinates(coords, 25); // 25m intervals for smoother curve
+    if (!samples || samples.length === 0) {
+        return;
+    }
+
+    // Progressive loading with updates
+    const elevRes = await fetchElevationsProgressive(samples, (partialResults) => {
+        APP.elevationData = partialResults;
+        const { gain, loss } = computeGainLoss(partialResults);
+        const gainEl = document.getElementById('elev-gain-val');
+        const lossEl = document.getElementById('elev-loss-val');
+        if (gainEl) gainEl.textContent = `${gain} m`;
+        if (lossEl) lossEl.textContent = `${loss} m`;
+        renderElevationProfile(partialResults);
+    });
+
     if (!elevRes) {
-        // hide elevation card if fetch fails
         const elevCard = document.getElementById('elevationCard');
         if (elevCard) elevCard.style.display = 'none';
         return;
@@ -1278,10 +1539,30 @@ async function fetchAndRenderElevation() {
     renderElevationProfile(elevRes);
 }
 
+function getGradientColor(grade) {
+    // grade is in percent (e.g., 5 for 5%)
+    if (grade < 3) return null; // use default color
+    if (grade < 6) return 'rgba(255, 255, 150, 0.35)'; // pastel yellow 3-5%
+    if (grade < 11) return 'rgba(255, 200, 150, 0.35)'; // pastel orange 6-10%
+    if (grade < 16) return 'rgba(255, 150, 150, 0.35)'; // pastel red 10-15%
+    if (grade < 21) return 'rgba(200, 150, 255, 0.35)'; // pastel purple 15-20%
+    return 'rgba(100, 100, 100, 0.35)'; // pastel black 20%+
+}
+
+function getGradientStrokeColor(grade) {
+    if (grade < 3) return '#32b8c6'; // default cyan
+    if (grade < 6) return '#CCCC00'; // yellow 3-5%
+    if (grade < 11) return '#FF8C00'; // orange 6-10%
+    if (grade < 16) return '#FF4444'; // red 10-15%
+    if (grade < 21) return '#9932CC'; // purple 15-20%
+    return '#333333'; // dark gray/black 20%+
+}
+
 function renderElevationProfile(data) {
     const canvas = document.getElementById('elevationCanvas');
     const tooltip = document.getElementById('elevationTooltip');
-    if (!canvas || !data || data.length === 0) return;
+    
+    if (!canvas || !data || !data.length) return;
 
     // set internal canvas size for crisp rendering
     const parent = canvas.parentElement || canvas;
@@ -1299,31 +1580,86 @@ function renderElevationProfile(data) {
     const elevations = data.map(d => d.elev);
     const minE = Math.min(...elevations);
     const maxE = Math.max(...elevations);
-    const pad = 8;
+    const pad = 2; // minimal padding to maximize curve width
+    const chartHeight = height - pad * 2;
+    const chartWidth = width - pad * 2;
 
-    // Draw filled curve
-    ctx.beginPath();
+    // Calculate gradients for each 100m segment
+    const grades = [];
+    const segmentDistance = 100; // meters
+    let currentSegmentStart = 0;
+    
     for (let i = 0; i < data.length; i++) {
-        const x = (i / (data.length - 1)) * (width - pad*2) + pad;
-        const y = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * (height - pad*2);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        // Find the point ~100m ahead
+        let endIdx = i;
+        for (let j = i + 1; j < data.length; j++) {
+            if (data[j].d - data[i].d >= segmentDistance) {
+                endIdx = j;
+                break;
+            }
+        }
+        
+        if (endIdx > i) {
+            const elevDiff = data[endIdx].elev - data[i].elev;
+            const dist = data[endIdx].d - data[i].d;
+            const grade = dist > 0 ? (elevDiff / dist) * 100 : 0;
+            grades.push(grade);
+        } else {
+            grades.push(grades[grades.length - 1] || 0);
+        }
     }
-    ctx.lineTo(width - pad, height - pad);
-    ctx.lineTo(pad, height - pad);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(50,184,198,0.12)';
-    ctx.fill();
 
-    // stroke line
-    ctx.beginPath();
-    for (let i = 0; i < data.length; i++) {
-        const x = (i / (data.length - 1)) * (width - pad*2) + pad;
-        const y = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * (height - pad*2);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    // Draw filled areas segment by segment
+    for (let i = 0; i < data.length - 1; i++) {
+        const grade = grades[i];
+        const color = getGradientColor(grade);
+        
+        const x1 = (i / (data.length - 1)) * chartWidth + pad;
+        const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1; // Add 0.1px overlap
+        const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+        const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+        
+        if (color) {
+            // Draw climb fill
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.lineTo(x2, height - pad);
+            ctx.lineTo(x1, height - pad);
+            ctx.closePath();
+            ctx.fillStyle = color;
+            ctx.fill();
+        } else {
+            // Draw default (flat/descent) fill
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.lineTo(x2, height - pad);
+            ctx.lineTo(x1, height - pad);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(50,184,198,0.12)';
+            ctx.fill();
+        }
     }
-    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--color-primary') || '#32b8c6';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+
+    // Draw stroke line segment by segment with slight overlap
+    for (let i = 0; i < data.length - 1; i++) {
+        const grade = grades[i];
+        const color = getGradientStrokeColor(grade);
+        
+        const x1 = (i / (data.length - 1)) * chartWidth + pad;
+        const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1; // Add 0.1px overlap
+        const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+        const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+        
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'square';
+        ctx.stroke();
+    }
 
     // draw horizontal markers (start/mid/end)
     const xAxis = document.getElementById('elevationXAxis');
@@ -1347,42 +1683,80 @@ function renderElevationProfile(data) {
         const point = data[idx];
         if (!point) return;
 
-        // position tooltip
+        // Calculate gradient at this point
+        let gradient = 0;
+        if (idx > 0 && idx < data.length - 1) {
+            const prevPoint = data[idx - 1];
+            const nextPoint = data[idx + 1];
+            const elevDiff = nextPoint.elev - prevPoint.elev;
+            const distDiff = nextPoint.d - prevPoint.d;
+            gradient = distDiff > 0 ? (elevDiff / distDiff) * 100 : 0;
+        }
+
+        // position tooltip - ensure it stays on screen
         if (tooltip) {
+            const tooltipWidth = 200;
+            const tooltipHeight = 60;
+            let left = evt.clientX + 10;
+            let top = evt.clientY - tooltipHeight - 10;
+            
+            if (left + tooltipWidth > window.innerWidth) {
+                left = evt.clientX - tooltipWidth - 10;
+            }
+            if (top < 0) {
+                top = evt.clientY + 10;
+            }
+            
+            tooltip.style.left = left + 'px';
+            tooltip.style.top = top + 'px';
             tooltip.style.display = 'block';
-            tooltip.style.left = (rect.left + (mouseX)) + 'px';
-            tooltip.textContent = `${(point.d/1000).toFixed(2)} km — ${Math.round(point.elev)} m`;
+            
+            const gradientText = gradient > 0 ? `+${gradient.toFixed(1)}%` : `${gradient.toFixed(1)}%`;
+            const gradientColor = Math.abs(gradient) > 8 ? (gradient > 0 ? '#ff4444' : '#44ff44') : '#ccc';
+            
+            tooltip.innerHTML = `
+                <div><strong>${(point.d/1000).toFixed(2)} km</strong> — <strong>${Math.round(point.elev)} m</strong></div>
+                <div style="color: ${gradientColor}; font-weight: 600;">${gradientText} gradient</div>
+            `;
         }
 
         // draw vertical line overlay on canvas
         ctx.clearRect(0, 0, width, height);
-        // redraw curve (simple, could be optimized)
-        // filled
-        ctx.beginPath();
-        for (let i = 0; i < data.length; i++) {
-            const x = (i / (data.length - 1)) * (width - pad*2) + pad;
-            const y = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * (height - pad*2);
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        
+        // redraw with gradient colors
+        for (let i = 0; i < data.length - 1; i++) {
+            const grade = grades[i];
+            const color = getGradientColor(grade);
+            const strokeColor = getGradientStrokeColor(grade);
+            
+            const x1 = (i / (data.length - 1)) * chartWidth + pad;
+            const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1; // Add 0.1px overlap
+            const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+            const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+            
+            // fill
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.lineTo(x2, height - pad);
+            ctx.lineTo(x1, height - pad);
+            ctx.closePath();
+            ctx.fillStyle = color || 'rgba(50,184,198,0.12)';
+            ctx.fill();
+            
+            // stroke
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'square';
+            ctx.stroke();
         }
-        ctx.lineTo(width - pad, height - pad);
-        ctx.lineTo(pad, height - pad);
-        ctx.closePath();
-        ctx.fillStyle = 'rgba(50,184,198,0.12)';
-        ctx.fill();
-        // stroke
-        ctx.beginPath();
-        for (let i = 0; i < data.length; i++) {
-            const x = (i / (data.length - 1)) * (width - pad*2) + pad;
-            const y = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * (height - pad*2);
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--color-primary') || '#32b8c6';
-        ctx.lineWidth = 2;
-        ctx.stroke();
 
-        // vertical line
+        // vertical line at hover position
         ctx.beginPath();
-        const vx = (idx / (data.length - 1)) * (width - pad*2) + pad;
+        const vx = (idx / (data.length - 1)) * chartWidth + pad;
         ctx.moveTo(vx, pad);
         ctx.lineTo(vx, height - pad);
         ctx.strokeStyle = 'rgba(255,255,255,0.7)';
@@ -1396,12 +1770,37 @@ function renderElevationProfile(data) {
     canvas.onmouseleave = function() {
         const tooltip = document.getElementById('elevationTooltip');
         if (tooltip) tooltip.style.display = 'none';
-        // remove preview marker on mouseout
         removeRoutePreview();
-        // re-render the static curve
         renderElevationProfile(data);
     };
 
+}
+
+// Draw vertical cursor line on elevation chart when hovering route
+function drawElevationCursor(routePoint) {
+    if (!APP.elevationData || APP.elevationData.length === 0) return;
+    if (!routePoint || routePoint.lat == null || routePoint.lng == null) return;
+    
+    const data = APP.elevationData;
+    
+    // Find closest point in elevation data by comparing lat/lng
+    let closestIdx = 0;
+    let minDist = Infinity;
+    for (let i = 0; i < data.length; i++) {
+        const dlat = data[i].lat - routePoint.lat;
+        const dlng = data[i].lng - routePoint.lng;
+        const dist = dlat * dlat + dlng * dlng;
+        if (dist < minDist) {
+            minDist = dist;
+            closestIdx = i;
+        }
+    }
+    
+    // Store current index for other functions
+    APP.elevationHoverIndex = closestIdx;
+    
+    // Just re-render - no cursor line needed (per user preference)
+    renderElevationProfile(data);
 }
 
 // ------------------ End elevation helpers ------------------
@@ -1902,6 +2301,50 @@ function initMap() {
             APP.contextMenuOpen = false;
         }
     });
+    
+    // Add drag-and-drop to sidebar
+    const sidebar = document.querySelector('.sidebar-card');
+    if (sidebar) {
+        sidebar.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            sidebar.classList.add('drag-active');
+            
+            // Show drop indicator
+            let dropIndicator = document.getElementById('dropIndicator');
+            if (!dropIndicator) {
+                dropIndicator = document.createElement('div');
+                dropIndicator.id = 'dropIndicator';
+                dropIndicator.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:18px;font-weight:600;color:#32b8c6;pointer-events:none;z-index:10;background:rgba(35,26,26,0.95);padding:20px;border-radius:8px;';
+                dropIndicator.textContent = 'Drop to Import';
+                sidebar.appendChild(dropIndicator);
+            }
+        });
+        
+        sidebar.addEventListener('dragleave', (e) => {
+            if (e.target === sidebar) {
+                sidebar.classList.remove('drag-active');
+                const dropIndicator = document.getElementById('dropIndicator');
+                if (dropIndicator) dropIndicator.remove();
+            }
+        });
+        
+        sidebar.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            sidebar.classList.remove('drag-active');
+            const dropIndicator = document.getElementById('dropIndicator');
+            if (dropIndicator) dropIndicator.remove();
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                if (file.name.toLowerCase().endsWith('.gpx')) {
+                    parseGPXFile(file);
+                }
+            }
+        });
+    }
 }
 
 // ========== AUTOCOMPLETE HELPERS ==========
@@ -1953,9 +2396,30 @@ window.addPointAsDestination = addPointAsDestination;
 window.addPointAsWaypoint = addPointAsWaypoint;
 // Expose export helpers for debugging / quick access
 window.exportGPX = exportGPX;
+window.importGPX = importGPX;
 
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     initializeSearchUI();
     initMap();
+    
+    // Wire import/export buttons
+    const exportBtn = document.getElementById('exportGpxHeaderBtn');
+    const importBtn = document.getElementById('importGpxHeaderBtn');
+    
+    if (exportBtn) {
+        exportBtn.addEventListener('click', () => exportGPX());
+    }
+    
+    if (importBtn) {
+        importBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            importGPX();
+        });
+    }
+    
+    // Initialize elevation module if using TIFF-based elevation (now uses API internally)
+    if (CONFIG.ELEVATION_SOURCE === 'tiff') {
+        await initElevation([]);
+    }
 });

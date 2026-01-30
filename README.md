@@ -96,8 +96,28 @@ Edit `js/config.js` to customize:
 - `PHOTONAPI` - Photon backend URL
 - `COUNTRYCODES` - Supported country codes
 - `ENABLE_DEBUG_MODE` - Toggle debug visualization
-
 - `UPLOAD_TIMEOUT_MS` - Timeout for proxy uploads in milliseconds
+
+### Elevation Data
+
+The app supports two elevation data sources:
+
+1. **TIFF Files (Recommended)** - Uses geotiff.js to read SRTM elevation data directly from GeoTIFF files in the browser:
+   - Set `ELEVATION_SOURCE: 'tiff'`
+   - Configure `ELEVATION_TIFFS` with paths to your SRTM GeoTIFF files
+   - Use the included `serve.py` script to serve both the frontend and elevation data
+   - No external API or server required
+
+2. **External API** - Uses an external elevation API (e.g., open-elevation):
+   - Set `ELEVATION_SOURCE: 'api'`
+   - Configure `ELEVATIONAPI` with the API URL
+
+To use TIFF-based elevation:
+```bash
+# Run the server from the frontend directory
+python serve.py
+```
+This serves the frontend on port 8080 and makes elevation data available at `/elevation-data/`.
 
 ## How to Use
 
