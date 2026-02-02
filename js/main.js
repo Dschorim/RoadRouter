@@ -2217,27 +2217,77 @@ function renderRoutePoints() {
         div.addEventListener('dragover', (e) => {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
+            
+            // Remove existing indicator
+            document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
+            
+            // Show drop indicator line between elements
+            const rect = div.getBoundingClientRect();
+            const midpoint = rect.top + rect.height / 2;
+            const isTopHalf = e.clientY < midpoint;
+            
+            // Store the drop position for use in drop event
+            div.dataset.dropBefore = isTopHalf ? 'true' : 'false';
+            
+            const indicator = document.createElement('div');
+            indicator.className = 'drop-indicator-line';
+            indicator.style.cssText = 'position:absolute;left:0;right:0;height:2px;background:#32b8c6;pointer-events:none;z-index:100;';
+            
+            const container = div.parentElement;
+            if (isTopHalf) {
+                // Insert before this element (gap is 8px, line is 2px, so center at -5px)
+                indicator.style.top = (div.offsetTop - 5) + 'px';
+            } else {
+                // Insert after this element (gap is 8px, line is 2px, so center at +3px)
+                indicator.style.top = (div.offsetTop + div.offsetHeight + 3) + 'px';
+            }
+            
+            container.style.position = 'relative';
+            container.appendChild(indicator);
         });
 
         div.addEventListener('drop', (e) => {
             e.preventDefault();
+            
+            // Remove drop indicator
+            document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
+            
             if (!APP.draggedElement || APP.draggedElement === div) return;
 
             const fromIndex = APP.routePoints.findIndex(p => p.id == APP.draggedElement.dataset.id);
             const toIndex = APP.routePoints.findIndex(p => p.id == div.dataset.id);
+            const dropBefore = div.dataset.dropBefore === 'true';
 
             if (fromIndex !== -1 && toIndex !== -1) {
                 const [removed] = APP.routePoints.splice(fromIndex, 1);
-                APP.routePoints.splice(toIndex, 0, removed);
+                
+                // Adjust target index if needed
+                let insertIndex = toIndex;
+                if (fromIndex < toIndex && !dropBefore) {
+                    // Moving down and dropping after: no adjustment needed
+                } else if (fromIndex < toIndex && dropBefore) {
+                    // Moving down and dropping before: adjust by -1
+                    insertIndex = toIndex - 1;
+                } else if (fromIndex > toIndex && !dropBefore) {
+                    // Moving up and dropping after: adjust by +1
+                    insertIndex = toIndex + 1;
+                }
+                // Moving up and dropping before: no adjustment needed
+                
+                APP.routePoints.splice(insertIndex, 0, removed);
                 updatePointTypes();
                 renderRoutePoints();
                 updateMapMarkers();
                 debouncedCalculateRoute();
             }
+            
+            delete div.dataset.dropBefore;
         });
 
         div.addEventListener('dragend', () => {
             APP.draggedElement = null;
+            // Remove any remaining drop indicators
+            document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
         });
     });
 }
@@ -2306,18 +2356,21 @@ function initMap() {
     const sidebar = document.querySelector('.sidebar-card');
     if (sidebar) {
         sidebar.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            sidebar.classList.add('drag-active');
-            
-            // Show drop indicator
-            let dropIndicator = document.getElementById('dropIndicator');
-            if (!dropIndicator) {
-                dropIndicator = document.createElement('div');
-                dropIndicator.id = 'dropIndicator';
-                dropIndicator.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:18px;font-weight:600;color:#32b8c6;pointer-events:none;z-index:10;background:rgba(35,26,26,0.95);padding:20px;border-radius:8px;';
-                dropIndicator.textContent = 'Drop to Import';
-                sidebar.appendChild(dropIndicator);
+            // Only show drop indicator if dragging files from outside
+            if (e.dataTransfer.types.includes('Files')) {
+                e.preventDefault();
+                e.stopPropagation();
+                sidebar.classList.add('drag-active');
+                
+                // Show drop indicator
+                let dropIndicator = document.getElementById('dropIndicator');
+                if (!dropIndicator) {
+                    dropIndicator = document.createElement('div');
+                    dropIndicator.id = 'dropIndicator';
+                    dropIndicator.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:18px;font-weight:600;color:#32b8c6;pointer-events:none;z-index:10;background:rgba(35,26,26,0.95);padding:20px;border-radius:8px;';
+                    dropIndicator.textContent = 'Drop to Import';
+                    sidebar.appendChild(dropIndicator);
+                }
             }
         });
         
