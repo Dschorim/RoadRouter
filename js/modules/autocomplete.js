@@ -20,7 +20,7 @@ export function ensureAutocompleteList() {
 
     // keyboard navigation state
     list._activeIndex = -1;
-    list.focusItemAt = function(idx) {
+    list.focusItemAt = function (idx) {
         const items = Array.from(list.querySelectorAll('.autocomplete-item'));
         items.forEach((it, i) => {
             const active = i === idx;
@@ -182,7 +182,7 @@ export function attachAutocompleteToInput(inputEl, pointIdLabel, opts = {}) {
             return;
         }
 
-        timeout = setTimeout(() => doSearch(query), 250);
+        timeout = setTimeout(() => doSearch(query), 50);
     });
 
     inputEl.addEventListener('focus', () => {
@@ -194,14 +194,14 @@ export function attachAutocompleteToInput(inputEl, pointIdLabel, opts = {}) {
     });
 
     inputEl.addEventListener('keyup', (e) => {
-        if (['ArrowDown','ArrowUp','Enter','Escape','Tab'].includes(e.key)) {
+        if (['ArrowDown', 'ArrowUp', 'Enter', 'Escape', 'Tab'].includes(e.key)) {
             return;
         }
 
         const q = inputEl.value.trim();
         if (q.length >= 2) {
             clearTimeout(timeout);
-            timeout = setTimeout(() => doSearch(q), 150);
+            timeout = setTimeout(() => doSearch(q), 50);
         } else {
             const l = ensureAutocompleteList();
             l.style.display = 'none';

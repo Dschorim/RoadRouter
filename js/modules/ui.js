@@ -1,9 +1,9 @@
 // ui.js - UI interaction and rendering
 import { APP } from './state.js';
-import { reverseGeocodeWithRateLimit } from '../geocoding.js';
+import { reverseGeocode } from '../geocoding.js';
 
 import { attachAutocompleteToInput } from './autocomplete.js';
-export { attachAutocompleteToInput }; // Re-export for main.js if needed or use directly
+export { attachAutocompleteToInput };
 import { isClickOnRoute } from './utils_local.js';
 
 // Callbacks
@@ -38,6 +38,29 @@ export function updatePointTypes() {
     });
 }
 
+function closeAllMenus() {
+    const menus = document.querySelectorAll('.custom-menu-overlay');
+    menus.forEach(m => m.remove());
+
+    // Also remove any existing context menus
+    const oldContext = document.getElementById('contextMenu');
+    if (oldContext) {
+        oldContext.classList.remove('active');
+        oldContext.style.display = 'none';
+        APP.contextMenuOpen = false;
+    }
+}
+
+// Global listener to close menus on outside click
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.custom-menu-overlay') && !e.target.closest('#contextMenu') && !e.target.closest('.map-pin')) {
+        closeAllMenus();
+    }
+});
+
+// Make removePoint globally available for the menu onclicks
+window.removePoint = removePoint;
+
 export function removePoint(id) {
     APP.routePoints = APP.routePoints.filter(p => p.id !== id);
     if (APP.routePoints.length === 1) {
@@ -53,6 +76,7 @@ export function removePoint(id) {
     renderRoutePoints();
     updateMapMarkers();
     if (_calculateRoute) _calculateRoute();
+    closeAllMenus();
 }
 
 export function updatePointAddress(id, newAddress, newLat, newLng) {
@@ -67,6 +91,7 @@ export function updatePointAddress(id, newAddress, newLat, newLng) {
 }
 
 export function addPoint(lat, lng, address) {
+    // legacy support if needed
     const newPoint = {
         id: APP.nextPointId++,
         lat: parseFloat(lat.toFixed(4)),
@@ -98,6 +123,11 @@ export function addNewWaypoint() {
 
     updatePointTypes();
     renderRoutePoints();
+    // Focus the new input
+    setTimeout(() => {
+        const input = document.getElementById(`input-${newPoint.id}`);
+        if (input) input.focus();
+    }, 50);
 }
 
 export function renderRoutePoints() {
@@ -142,14 +172,13 @@ export function renderRoutePoints() {
             APP.lastFocusedInputId = point.id;
         });
 
-        // clicking the point-type badge should center the map on the point
         const badge = div.querySelector('.point-type-badge');
         if (badge) {
             badge.style.cursor = 'pointer';
             badge.addEventListener('click', (e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 if (point.lat !== null && point.lng !== null && APP.map) {
-                    // keep current zoom level
                     APP.map.setView([point.lat, point.lng], APP.map.getZoom(), { animate: true });
                 }
             });
@@ -159,7 +188,6 @@ export function renderRoutePoints() {
             e.stopPropagation();
         });
 
-        // Attach autocomplete to each dynamically created input (idempotent per DOM element)
         if (!input.dataset.autocompleteAttached) {
             attachAutocompleteToInput(input, point.id, {
                 onSelect: ({ display, lat, lon }) => {
@@ -188,6 +216,7 @@ export function renderRoutePoints() {
             input.dataset.autocompleteAttached = '1';
         }
 
+        // Drag and Drop Logic
         div.addEventListener('dragstart', (e) => {
             APP.draggedElement = div;
             e.dataTransfer.effectAllowed = 'move';
@@ -196,16 +225,11 @@ export function renderRoutePoints() {
         div.addEventListener('dragover', (e) => {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
-
-            // Remove existing indicator
             document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
 
-            // Show drop indicator line between elements
             const rect = div.getBoundingClientRect();
             const midpoint = rect.top + rect.height / 2;
             const isTopHalf = e.clientY < midpoint;
-
-            // Store the drop position for use in drop event
             div.dataset.dropBefore = isTopHalf ? 'true' : 'false';
 
             const indicator = document.createElement('div');
@@ -214,21 +238,16 @@ export function renderRoutePoints() {
 
             const container = div.parentElement;
             if (isTopHalf) {
-                // Insert before this element (gap is 8px, line is 2px, so center at -5px)
                 indicator.style.top = (div.offsetTop - 5) + 'px';
             } else {
-                // Insert after this element (gap is 8px, line is 2px, so center at +3px)
                 indicator.style.top = (div.offsetTop + div.offsetHeight + 3) + 'px';
             }
-
             container.style.position = 'relative';
             container.appendChild(indicator);
         });
 
         div.addEventListener('drop', (e) => {
             e.preventDefault();
-
-            // Remove drop indicator
             document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
 
             if (!APP.draggedElement || APP.draggedElement === div) return;
@@ -239,19 +258,13 @@ export function renderRoutePoints() {
 
             if (fromIndex !== -1 && toIndex !== -1) {
                 const [removed] = APP.routePoints.splice(fromIndex, 1);
-
-                // Adjust target index if needed
                 let insertIndex = toIndex;
                 if (fromIndex < toIndex && !dropBefore) {
-                    // Moving down and dropping after: no adjustment needed
                 } else if (fromIndex < toIndex && dropBefore) {
-                    // Moving down and dropping before: adjust by -1
                     insertIndex = toIndex - 1;
                 } else if (fromIndex > toIndex && !dropBefore) {
-                    // Moving up and dropping after: adjust by +1
                     insertIndex = toIndex + 1;
                 }
-                // Moving up and dropping before: no adjustment needed
 
                 APP.routePoints.splice(insertIndex, 0, removed);
                 updatePointTypes();
@@ -259,13 +272,11 @@ export function renderRoutePoints() {
                 updateMapMarkers();
                 if (_calculateRoute) _calculateRoute();
             }
-
             delete div.dataset.dropBefore;
         });
 
         div.addEventListener('dragend', () => {
             APP.draggedElement = null;
-            // Remove any remaining drop indicators
             document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
         });
     });
@@ -301,31 +312,66 @@ export function updateMapMarkers() {
         const marker = L.marker([point.lat, point.lng], { icon, draggable: true })
             .addTo(APP.markerLayer);
 
-        const popupContent = `
-            <div style="padding: 8px; font-size: 12px;">
-                <strong>${point.address || 'Location'}</strong>
-                <button onclick="removePoint(${point.id})" style="
-                    display: block;
-                    margin-top: 8px;
-                    padding: 4px 8px;
-                    background: #ff6b7a;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    font-size: 11px;
-                    width: 100%;
-                ">Remove</button>
-            </div>
-        `;
-        marker.bindPopup(popupContent);
+        // Custom Overlay for Marker Menu (instead of Leaflet popup)
+        marker.on('click', (e) => {
+            L.DomEvent.stopPropagation(e);
+            closeAllMenus();
+
+            const mapContainer = APP.map.getContainer();
+            const pointPx = APP.map.latLngToContainerPoint([point.lat, point.lng]);
+
+            const menu = document.createElement('div');
+            menu.className = 'custom-menu-overlay';
+            // Center horizontally above point
+            menu.style.left = pointPx.x + 'px';
+            menu.style.top = pointPx.y + 'px';
+
+            // Modern, dark-mode compatible menu content
+            const addr = point.address || 'Locating...';
+
+            // SVG Icons
+            const trashIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+
+            menu.innerHTML = `
+                <div class="menu-content">
+                    <div class="menu-header">
+                        <div class="menu-title">${addr}</div>
+                        <div class="menu-coords">${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}</div>
+                    </div>
+                    <div class="menu-divider"></div>
+                    <button class="menu-item danger" onclick="removePoint(${point.id})">
+                        ${trashIcon}
+                        <span>Remove Point</span>
+                    </button>
+                </div>
+            `;
+
+            mapContainer.appendChild(menu);
+
+            const removeBtn = menu.querySelector('.menu-item.danger');
+            if (removeBtn) {
+                removeBtn.onclick = (e) => {
+                    L.DomEvent.stopPropagation(e);
+                    removePoint(point.id);
+                };
+            }
+
+            // If address is "Locating...", try to refresh it
+            if (addr === 'Locating...') {
+                reverseGeocode(point.lat, point.lng).then(res => {
+                    point.address = res;
+                    const title = menu.querySelector('.menu-title');
+                    if (title) title.textContent = res;
+                });
+            }
+        });
 
         APP.mapMarkers[point.id] = marker;
 
         marker.on('dragstart', (e) => {
             APP.isDraggingMarker = true;
             APP.draggedMarkerStartPos = { lat: point.lat, lng: point.lng };
-            marker.closePopup();
+            closeAllMenus();
         });
 
         marker.on('drag', (e) => {
@@ -337,11 +383,10 @@ export function updateMapMarkers() {
 
         marker.on('dragend', (e) => {
             APP.isDraggingMarker = false;
-            if (APP.map && APP.map.dragging) APP.map.dragging.enable();
             const pos = e.target.getLatLng();
             const lat = parseFloat(pos.lat.toFixed(4));
             const lng = parseFloat(pos.lng.toFixed(4));
-            reverseGeocodeWithRateLimit(lat, lng).then((address) => {
+            reverseGeocode(lat, lng).then((address) => {
                 updatePointAddress(point.id, address, lat, lng);
                 const input = document.getElementById(`input-${point.id}`);
                 if (input) input.value = address;
@@ -353,16 +398,12 @@ export function updateMapMarkers() {
 }
 
 export function handleMapClick(latlng) {
-    const contextMenu = document.getElementById('contextMenu');
-    if (APP.contextMenuOpen) {
-        contextMenu.classList.remove('active');
-        APP.contextMenuOpen = false;
+    if (document.querySelector('.custom-menu-overlay') || APP.contextMenuOpen) {
+        closeAllMenus();
         return;
     }
 
-    if (APP.routeClickJustHappened) {
-        return;
-    }
+    if (APP.routeClickJustHappened) return;
 
     const routeCheck = APP.routePolylineMouseDown;
     const markerCheck = APP.isDraggingMarker;
@@ -373,161 +414,161 @@ export function handleMapClick(latlng) {
         return;
     }
 
-    const lat = latlng.lat;
-    const lng = latlng.lng;
-
-    if (APP.lastFocusedInputId !== null) {
-        const point = APP.routePoints.find(p => p.id === APP.lastFocusedInputId);
-        if (point) {
-            const input = document.getElementById(`input-${APP.lastFocusedInputId}`);
-            point.lat = lat;
-            point.lng = lng;
-            point.address = 'Locating...';
-            if (input) input.value = 'Locating...';
-
-            updatePointTypes();
-            updateMapMarkers();
-            renderRoutePoints();
-            if (_calculateRoute) _calculateRoute();
-
-            APP.lastFocusedInputId = null;
-
-            reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-                point.address = address;
-                if (input) input.value = address;
-                renderRoutePoints();
-            });
-        }
-        return;
-    }
+    const { lat, lng } = latlng;
 
     const startPoint = APP.routePoints.find(p => p.type === 'start');
     const destPoint = APP.routePoints.find(p => p.type === 'dest');
 
-    const hasStart = startPoint && startPoint.lat !== null;
-    const hasDestination = destPoint && destPoint.lng !== null;
-
-    if (!hasStart) {
+    if (!startPoint || startPoint.lat === null) {
         APP.routePoints[0].lat = lat;
         APP.routePoints[0].lng = lng;
         APP.routePoints[0].address = 'Locating...';
-        renderRoutePoints();
-        updateMapMarkers();
+        finishMapClickAction(lat, lng, APP.routePoints[0]);
         showRouteContent();
-
-        reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-            APP.routePoints[0].address = address;
-            renderRoutePoints();
-        });
-    } else if (!hasDestination) {
-        APP.routePoints[1].lat = lat;
-        APP.routePoints[1].lng = lng;
-        APP.routePoints[1].address = 'Locating...';
-        renderRoutePoints();
-        updateMapMarkers();
-        if (_calculateRoute) _calculateRoute();
-
-        reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-            APP.routePoints[1].address = address;
-            renderRoutePoints();
-        });
+    } else if (!destPoint || destPoint.lat === null) {
+        const p = APP.routePoints[APP.routePoints.length - 1];
+        p.lat = lat;
+        p.lng = lng;
+        p.address = 'Locating...';
+        finishMapClickAction(lat, lng, p);
     } else {
         destPoint.type = 'waypoint';
-
         const newDest = {
             id: APP.nextPointId++,
-            lat: lat,
-            lng: lng,
-            address: 'Locating...',
-            type: 'dest'
+            lat, lng, address: 'Locating...', type: 'dest'
         };
         APP.routePoints.push(newDest);
-
-        updatePointTypes();
-        renderRoutePoints();
-        updateMapMarkers();
-        if (_calculateRoute) _calculateRoute();
-
-        reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-            newDest.address = address;
-            renderRoutePoints();
-        });
+        finishMapClickAction(lat, lng, newDest);
     }
 }
 
-export function addPointAsStart(lat, lng) {
-    reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-        if (APP.routePoints.length > 0 && APP.routePoints[0].lat === null) {
-            APP.routePoints[0].lat = lat;
-            APP.routePoints[0].lng = lng;
-            APP.routePoints[0].address = address;
-        } else {
-            const newPoint = {
-                id: APP.nextPointId++,
-                lat: lat,
-                lng: lng,
-                address: address,
-                type: 'start'
-            };
-            APP.routePoints.unshift(newPoint);
-        }
-        updatePointTypes();
+function finishMapClickAction(lat, lng, pointObj) {
+    renderRoutePoints();
+    updateMapMarkers();
+    if (_calculateRoute) _calculateRoute();
+
+    reverseGeocode(lat, lng).then(addr => {
+        pointObj.address = addr;
         renderRoutePoints();
-        updateMapMarkers();
-        if (_calculateRoute) _calculateRoute();
-        document.getElementById('contextMenu').classList.remove('active');
-        APP.contextMenuOpen = false;
-        showRouteContent();
     });
 }
+
+// Right Click Context Menu Handler
+export function handleMapRightClick(e) {
+    if (e.originalEvent) {
+        L.DomEvent.preventDefault(e.originalEvent);
+        L.DomEvent.stopPropagation(e.originalEvent);
+    }
+
+    closeAllMenus();
+
+    const { latlng, originalEvent } = e;
+    const menu = document.getElementById('contextMenu');
+    if (!menu) return;
+
+    APP.contextMenuOpen = true;
+
+    menu.dataset.lat = latlng.lat;
+    menu.dataset.lng = latlng.lng;
+
+    // Center horizontally above point
+    menu.style.display = 'block';
+    menu.style.left = originalEvent.clientX + 'px';
+    menu.style.top = originalEvent.clientY + 'px';
+    menu.classList.add('active');
+
+    const latStr = latlng.lat.toFixed(4);
+    const lngStr = latlng.lng.toFixed(4);
+
+    const startIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>`;
+    const destIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="3"/></svg>`;
+    const wayIcon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`;
+
+    menu.innerHTML = `
+        <div class="menu-content">
+            <div class="menu-header" style="border-radius: 12px 12px 0 0; overflow: hidden;">
+                <div class="menu-title">Locating...</div>
+                <div class="menu-coords">${latStr}, ${lngStr}</div>
+            </div>
+            <div class="menu-divider"></div>
+            <button class="menu-item" onclick="addPointAsStart(${latlng.lat}, ${latlng.lng})">
+                ${startIcon} <span>Set as Start</span>
+            </button>
+            <button class="menu-item" onclick="addPointAsDestination(${latlng.lat}, ${latlng.lng})">
+                ${destIcon} <span>Set as Destination</span>
+            </button>
+            <button class="menu-item" onclick="addPointAsWaypoint(${latlng.lat}, ${latlng.lng})">
+                ${wayIcon} <span>Add as Waypoint</span>
+            </button>
+        </div>
+    `;
+
+    reverseGeocode(latlng.lat, latlng.lng).then(address => {
+        const titleEl = menu.querySelector('.menu-title');
+        if (titleEl) titleEl.textContent = address;
+    });
+}
+
+// Global functions for menu buttons - Defined ONCE and exported
+export function addPointAsStart(lat, lng) {
+    if (APP.routePoints.length > 0) {
+        APP.routePoints[0].lat = lat;
+        APP.routePoints[0].lng = lng;
+        APP.routePoints[0].address = 'Locating...';
+    } else {
+        APP.routePoints.push({ id: APP.nextPointId++, lat, lng, address: 'Locating...', type: 'start' });
+    }
+    closeAllMenus();
+    finishMapClickAction(lat, lng, APP.routePoints[0]);
+    showRouteContent();
+}
+window.addPointAsStart = addPointAsStart;
 
 export function addPointAsDestination(lat, lng) {
-    reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-        if (APP.routePoints.length > 0 && APP.routePoints[APP.routePoints.length - 1].lat === null) {
-            APP.routePoints[APP.routePoints.length - 1].lat = lat;
-            APP.routePoints[APP.routePoints.length - 1].lng = lng;
-            APP.routePoints[APP.routePoints.length - 1].address = address;
-        } else {
-            const newPoint = {
-                id: APP.nextPointId++,
-                lat: lat,
-                lng: lng,
-                address: address,
-                type: 'dest'
-            };
-            APP.routePoints.push(newPoint);
-        }
-        updatePointTypes();
-        renderRoutePoints();
-        updateMapMarkers();
-        if (_calculateRoute) _calculateRoute();
-        document.getElementById('contextMenu').classList.remove('active');
-        APP.contextMenuOpen = false;
-    });
+    const last = APP.routePoints[APP.routePoints.length - 1];
+    if (last && last.type === 'dest') {
+        last.lat = lat;
+        last.lng = lng;
+        last.address = 'Locating...';
+        closeAllMenus();
+        finishMapClickAction(lat, lng, last);
+    } else {
+        const newDest = { id: APP.nextPointId++, lat, lng, address: 'Locating...', type: 'dest' };
+        APP.routePoints.push(newDest);
+        closeAllMenus();
+        finishMapClickAction(lat, lng, newDest);
+    }
+    showRouteContent(); // Ensure UI is updated
 }
+window.addPointAsDestination = addPointAsDestination;
 
 export function addPointAsWaypoint(lat, lng) {
-    reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-        const newPoint = {
-            id: APP.nextPointId++,
-            lat: lat,
-            lng: lng,
-            address: address,
-            type: 'waypoint'
-        };
-        if (APP.routePoints.length >= 2) {
-            APP.routePoints.splice(APP.routePoints.length - 1, 0, newPoint);
-        } else {
-            APP.routePoints.push(newPoint);
-        }
-        updatePointTypes();
+    const newPoint = {
+        id: APP.nextPointId++,
+        lat, lng,
+        address: 'Locating...',
+        type: 'waypoint'
+    };
+
+    if (APP.routePoints.length > 1) {
+        APP.routePoints.splice(APP.routePoints.length - 1, 0, newPoint);
+    } else {
+        APP.routePoints.push(newPoint);
+    }
+
+    closeAllMenus();
+    updatePointTypes();
+    renderRoutePoints();
+    updateMapMarkers();
+    if (_calculateRoute) _calculateRoute();
+    showRouteContent(); // Ensure UI is updated
+
+    reverseGeocode(lat, lng).then(addr => {
+        newPoint.address = addr;
         renderRoutePoints();
-        updateMapMarkers();
-        if (_calculateRoute) _calculateRoute();
-        document.getElementById('contextMenu').classList.remove('active');
-        APP.contextMenuOpen = false;
     });
 }
+window.addPointAsWaypoint = addPointAsWaypoint;
 
 export function createOrUpdateRoutePreview(point) {
     if (!point || !APP.markerLayer) return;

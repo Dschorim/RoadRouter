@@ -149,8 +149,6 @@ Edit `js/config.js` to customize:
 
 ### Geocoding
 - Uses Photon reverse geocoding
-- Requests queued to respect API rate limits (0.5s between requests)
-- Results cached to minimize API calls
 - Fallback to coordinates if reverse geocoding fails
 
 ### Performance Optimizations

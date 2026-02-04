@@ -3,7 +3,7 @@ import CONFIG from './config.js';
 // Simple reverse geocoding with cache (no rate limiting)
 const geocodingCache = {};
 
-export async function reverseGeocodeWithRateLimit(lat, lng) {
+export async function reverseGeocode(lat, lng) {
     const cacheKey = `${lat.toFixed(4)},${lng.toFixed(4)}`;
 
     if (geocodingCache[cacheKey]) {

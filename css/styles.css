@@ -762,3 +762,151 @@ body {
     color: var(--color-text-secondary);
     padding-right: 8px;
 }
+
+/* Modern Context Menu & Custom Popups */
+.custom-menu-overlay,
+#contextMenu {
+    position: absolute;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-md);
+    z-index: 20000;
+    /* Above everything */
+    min-width: 200px;
+    /* overflow: hidden;  <-- REMOVED to allow triangle to show */
+    backdrop-filter: blur(12px);
+    animation: menuFadeIn 0.15s cubic-bezier(0.2, 0, 0.2, 1);
+    transform: translate(-50%, -100%);
+    /* Center horizontally and move up */
+    margin-top: -12px;
+    /* Space for the triangle */
+}
+
+/* Triangle Pointer */
+.custom-menu-overlay::after,
+#contextMenu::after {
+    content: '';
+    position: absolute;
+    bottom: -8px;
+    /* Position below */
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 8px solid var(--color-surface);
+    /* Matches background */
+    filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.1));
+    z-index: 1;
+}
+
+/* Border for triangle (optional, complex to do perfectly with drop-shadow, using simplified approach) */
+.custom-menu-overlay::before,
+#contextMenu::before {
+    content: '';
+    position: absolute;
+    bottom: -9px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 9px solid transparent;
+    border-right: 9px solid transparent;
+    border-top: 9px solid var(--color-border);
+    z-index: 0;
+}
+
+@keyframes menuFadeIn {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -100%) scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: translate(-50%, -100%) scale(1);
+    }
+}
+
+.menu-content {
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+}
+
+.menu-header {
+    padding: 8px 12px;
+}
+
+.menu-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text);
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+}
+
+.menu-coords {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    font-family: monospace;
+}
+
+.menu-divider {
+    height: 1px;
+    background: var(--color-border);
+    margin: 4px 6px;
+}
+
+.menu-item,
+.menu-action {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: var(--color-text);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.1s;
+}
+
+.menu-item:hover,
+.menu-action:hover {
+    background: var(--color-surface-light);
+}
+
+.menu-item svg {
+    width: 16px;
+    height: 16px;
+    opacity: 0.8;
+}
+
+/* Danger variant for remove button */
+.menu-item.danger,
+.menu-action.danger {
+    color: var(--color-error);
+}
+
+.menu-item.danger:hover,
+.menu-action.danger:hover {
+    background: rgba(255, 107, 122, 0.1);
+}
+
+/* Override existing context menu styles if any */
+.context-menu {
+    display: none;
+}
+
+.context-menu.active {
+    display: block;
+}

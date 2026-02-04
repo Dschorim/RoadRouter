@@ -5,7 +5,7 @@ import { initializeMap, updateRouteStyle, toggleDarkMode } from './modules/map.j
 import { toggleDebugMode, setUpdateRouteStyleCallback } from './modules/debug.js';
 import * as UI from './modules/ui.js';
 import { attachAutocompleteToInput } from './modules/autocomplete.js';
-import { reverseGeocodeWithRateLimit } from './geocoding.js';
+import { reverseGeocode } from './geocoding.js';
 import { formatDistance, formatDuration } from './utils.js';
 import { initialize as initElevation, getElevations } from './elevation.js';
 import { fetchAndRenderElevation } from './modules/elevation_renderer.js';
@@ -83,8 +83,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Map Event Listeners
     APP.map.on('click', (e) => {
         if (!APP.routePolylineMouseDown && !APP.isDraggingMarker) {
-            UI.handleMapClick(e.latlng); // Need to implement/export handleMapClick in UI
+            UI.handleMapClick(e.latlng);
         }
+    });
+
+    APP.map.on('contextmenu', (e) => {
+        UI.handleMapRightClick(e);
     });
 });
 
@@ -251,7 +255,7 @@ function handleRoutePolylineMouseDown(e) {
 
     e.originalEvent.stopPropagation();
 
-    reverseGeocodeWithRateLimit(latlng.lat, latlng.lng).then((address) => {
+    reverseGeocode(latlng.lat, latlng.lng).then((address) => {
         newPoint.address = address;
         UI.renderRoutePoints();
     });
@@ -286,7 +290,7 @@ function routeMouseUpHandler(e) {
     if (APP.waypointBeingDragged !== null) {
         const point = APP.routePoints.find(p => p.id === APP.waypointBeingDragged);
         if (point) {
-            reverseGeocodeWithRateLimit(point.lat, point.lng).then((address) => {
+            reverseGeocode(point.lat, point.lng).then((address) => {
                 point.address = address;
                 UI.updatePointAddress(APP.waypointBeingDragged, address, point.lat, point.lng);
                 UI.renderRoutePoints();
@@ -510,7 +514,7 @@ function parseGPXFile(file) {
 
             // Reverse Geocode
             APP.routePoints.forEach(point => {
-                reverseGeocodeWithRateLimit(point.lat, point.lng).then(address => {
+                reverseGeocode(point.lat, point.lng).then(address => {
                     point.address = address;
                     const input = document.getElementById(`input-${point.id}`);
                     if (input) input.value = address;

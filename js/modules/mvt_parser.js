@@ -20,7 +20,7 @@ export function parseMVTTile(arrayBuffer) {
                 const layerEnd = pos + len;
                 const layer = decodePBFLayer(view, pos, layerEnd);
 
-                if (layer.name === 'speeds' && layer.features) {
+                if (layer.features) {
                     layer.features.forEach((feature, fIdx) => {
                         const props = {};
 
@@ -40,6 +40,8 @@ export function parseMVTTile(arrayBuffer) {
                         let speedValue = 0;
                         if (props.speed !== undefined) {
                             speedValue = typeof props.speed === 'number' ? Math.round(props.speed) : parseInt(props.speed) || 0;
+                        } else if (props.rate !== undefined) {
+                            speedValue = typeof props.rate === 'number' ? Math.round(props.rate) : parseInt(props.rate) || 0;
                         }
 
                         features.push({
