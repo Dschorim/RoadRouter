@@ -11,7 +11,7 @@
     --color-success: #32b8c6;
     --shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.4);
-    
+
     /* Modern pastel colors */
     --color-start: #a8e6cf;
     --color-start-dark: #56c596;
@@ -25,7 +25,8 @@
     box-sizing: border-box;
 }
 
-html, body {
+html,
+body {
     margin: 0;
     padding: 0;
     width: 100%;
@@ -78,7 +79,8 @@ html, body {
 
 .sidebar-card {
     width: 380px;
-    max-height: calc(100vh - 242px - 24px); /* viewport - top(24) - gap(24) - elevation(170) - bottom(24) - extra gap(24) */
+    max-height: calc(100vh - 242px - 24px);
+    /* viewport - top(24) - gap(24) - elevation(170) - bottom(24) - extra gap(24) */
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 16px;
@@ -99,7 +101,7 @@ html, body {
     background: rgba(35, 26, 26, 0.95);
 }
 
-.sidebar-card.drag-active > *:not(#dropIndicator) {
+.sidebar-card.drag-active>*:not(#dropIndicator) {
     filter: blur(3px);
     pointer-events: none;
 }
@@ -418,7 +420,8 @@ html, body {
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: var(--color-primary); /* fill so no transparent gap */
+    background: var(--color-primary);
+    /* fill so no transparent gap */
     display: flex;
     align-items: center;
     justify-content: center;
@@ -441,13 +444,13 @@ html, body {
     height: 12px;
     border-radius: 50%;
     background: #ffffff;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
 .leaflet-div-icon {
     background: transparent;
     border: none;
-} 
+}
 
 #routeInfo {
     padding: 12px;
@@ -499,18 +502,18 @@ html, body {
         left: 12px;
         right: 12px;
     }
-    
+
     .elevation-card {
         left: 12px;
         right: 12px;
         bottom: 12px;
         height: 140px;
     }
-    
+
     .leaflet-top {
         top: 12px !important;
     }
-    
+
     .leaflet-left {
         left: auto !important;
         right: 12px !important;
@@ -615,28 +618,29 @@ html, body {
     top: 24px !important;
 }
 
-.leaflet-left {
-    left: auto !important;
+.leaflet-right {
     right: 24px !important;
 }
 
-/* Make the control container flexible to stack items */
-.leaflet-top.leaflet-left {
+/* Make the control container flexible to place items side by side */
+.leaflet-top.leaflet-right {
     display: flex !important;
-    flex-direction: column !important;
-    align-items: flex-end !important;
+    flex-direction: row !important;
+    align-items: flex-start !important;
     gap: 8px !important;
     z-index: 1000 !important;
 }
 
 .debug-legend-card {
-    order: 1 !important;  /* Legend first */
-    margin-right: 80px !important;
-    margin-top: 0 !important;
+    order: 1 !important;
+    /* Legend first (left) */
+    margin: 0 !important;
+    pointer-events: auto !important;
 }
 
 .leaflet-control-zoom {
-    order: 2 !important;  /* Zoom buttons below */
+    order: 2 !important;
+    /* Zoom buttons second (right) */
     margin-top: 0 !important;
     border-radius: 8px;
     background: var(--color-surface) !important;
@@ -734,7 +738,7 @@ html, body {
     font-size: 12px;
     white-space: nowrap;
     z-index: 100000 !important;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
     color: white !important;
     opacity: 1 !important;
 }
@@ -757,6 +761,4 @@ html, body {
     font-size: 12px;
     color: var(--color-text-secondary);
     padding-right: 8px;
-} 
-
-
+}

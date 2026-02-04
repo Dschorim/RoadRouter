@@ -1,668 +1,102 @@
-// ==================== APP STATE (exported) ====================
-export const APP = {
-    map: null,
-    routeLayer: null,
-    markerLayer: null,
-    routePoints: [],
-    nextPointId: 1,
-    currentRoute: null,
-    calculateRouteTimer: null,
-    previewRouteTimer: null,
-    contextMenuOpen: false,
-    activeInputPointId: null,
-    draggedElement: null,
-    isPolylineMouseDown: false,
-    waypointBeingDragged: null,
-    mapMarkers: {},
-    currentPolyline: null,
-    routePolylineMouseDown: false,
-    routeMouseMoveHandler: null,
-    routeMouseUpHandler: null,
-    isDraggingMarker: false,
-    draggedMarkerStartPos: null,
-    lastPreviewTime: 0,
-    previewMarker: null,
-    routeClickJustHappened: false,
-    lastFocusedInputId: null,
-    attachedAutocompleteInputs: new Set()
-};
-
+// main.js - Application Entry Point
+import { APP } from './modules/state.js';
+import CONFIG from './config.js';
+import { initializeMap, updateRouteStyle, toggleDarkMode } from './modules/map.js';
+import { toggleDebugMode, setUpdateRouteStyleCallback } from './modules/debug.js';
+import * as UI from './modules/ui.js';
 import { attachAutocompleteToInput } from './modules/autocomplete.js';
 import { reverseGeocodeWithRateLimit } from './geocoding.js';
 import { formatDistance, formatDuration } from './utils.js';
-import CONFIG from './config.js';
 import { initialize as initElevation, getElevations } from './elevation.js';
+import { fetchAndRenderElevation } from './modules/elevation_renderer.js';
 
+// ==================== INITIALIZATION ====================
 
-// ==================== DEBUG MODE WITH OSRM TILE SERVICE ====================
-let debugMode = false;
-let debugTileLayer = null;
-let speedStats = { min: Infinity, max: 0, speeds: [] };
-let debugLegendControl = null;
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize Map
+    initializeMap();
 
-function toggleDebugMode() {
-    if (!CONFIG.ENABLE_DEBUG_MODE) return;
-    
-    debugMode = !debugMode;
-    const btn = document.getElementById('debugToggleBtn');
-    
-    if (debugMode) {
-        btn.classList.add('active');
-        speedStats = { min: Infinity, max: 0, speeds: [] };
-        loadDebugVisualization();
-        updateRouteStyle();
-    } else {
-        btn.classList.remove('active');
-        removeDebugVisualization();
-        updateRouteStyle();
-    }
-}
+    // Initialize UI Callbacks
+    UI.setUICallbacks(debouncedCalculateRoute, throttledPreviewRouteCalculation);
 
-function loadDebugVisualization() {
-    try {
-        const GridLayer = L.GridLayer.extend({
-            createTile: function(coords) {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                const size = this.getTileSize();
-                canvas.width = size.x;
-                canvas.height = size.y;
-                
-                const z = coords.z;
-                const x = coords.x;
-                const y = coords.y;
-                
-                this.fetchAndRenderTile(ctx, x, y, z, size);
-                
-                return canvas;
-            },
-            
-            fetchAndRenderTile: function(ctx, x, y, z, size) {
-                const url = `${CONFIG.OSRMAPI}/tile/v1/driving/tile(${x},${y},${z}).mvt`;
-                
-                fetch(url)
-                    .then(r => {
-                        if (!r.ok) {
-                            this.drawEmptyTile(ctx, size);
-                            return null;
-                        }
-                        return r.arrayBuffer();
-                    })
-                    .then(buffer => {
-                        if (!buffer) return;
-                        
-                        try {
-                            this.renderTile(ctx, buffer, size, z);
-                        } catch (e) {
-                            console.error('Tile render error:', e);
-                            this.drawEmptyTile(ctx, size);
-                        }
-                    })
-                    .catch(() => {
-                        this.drawEmptyTile(ctx, size);
-                    });
-            },
-            
-            renderTile: function(ctx, buffer, size, z) {
-                ctx.fillStyle = 'rgba(0, 0, 0, 0)';
-                ctx.fillRect(0, 0, size.x, size.y);
-                
-                // Only render debug lines at zoom levels 15-18
-                if (APP.map.getZoom() < 15) {
-                    return;
-                }
-                
-                try {
-                    const features = parseMVTTile(buffer);
-                    
-                    features.forEach(f => {
-                        speedStats.speeds.push(f.speed);
-                        speedStats.min = Math.min(speedStats.min, f.speed);
-                        speedStats.max = Math.max(speedStats.max, f.speed);
-                    });
-                    
-                    updateDebugLegend();
-                    
-                    features.forEach(feature => {
-                        const speed = feature.speed || 0;
-                        const color = getAdaptiveSpeedColor(speed, speedStats.min, speedStats.max);
-                        
-                        ctx.strokeStyle = color;
-                        ctx.lineWidth = 3;
-                        ctx.lineCap = 'round';
-                        ctx.lineJoin = 'round';
-                        ctx.globalAlpha = 0.9;
-                        
-                        if (feature.geometry && feature.geometry.length > 0) {
-                            feature.geometry.forEach(ring => {
-                                if (ring && ring.length > 1) {
-                                    ctx.beginPath();
-                                    ring.forEach((point, idx) => {
-                                        const px = (point.x / 4096) * size.x;
-                                        const py = (point.y / 4096) * size.y;
-                                        
-                                        if (idx === 0) {
-                                            ctx.moveTo(px, py);
-                                        } else {
-                                            ctx.lineTo(px, py);
-                                        }
-                                    });
-                                    ctx.stroke();
-                                }
-                            });
-                        }
-                    });
-                } catch (e) {
-                    console.error('Tile render error:', e);
-                }
-                
-                ctx.globalAlpha = 1.0;
-            },
-            
-            drawEmptyTile: function(ctx, size) {
-                ctx.fillStyle = 'rgba(0, 0, 0, 0)';
-                ctx.fillRect(0, 0, size.x, size.y);
-            }
-        });
-        
-        debugTileLayer = new GridLayer({
-            maxZoom: 18,
-            minZoom: 15,  // Only show at zoom 15+
-            tileSize: 256
-        });
-        
-        debugTileLayer.addTo(APP.map);
-        
-        setTimeout(() => {
-            const debugPane = debugTileLayer.getPane();
-            if (debugPane) {
-                debugPane.style.zIndex = '400';
-                debugPane.style.pointerEvents = 'none';
-            }
-        }, 50);
-        
-        createDebugLegendControl();
-        
-    } catch (error) {
-        console.error('Debug visualization error:', error);
-        debugMode = false;
-        document.getElementById('debugToggleBtn').classList.remove('active');
-    }
-}
+    // Attach Global Functions for HTML Buttons
+    window.addNewWaypoint = UI.addNewWaypoint;
+    window.removePoint = UI.removePoint;
+    window.addPointAsStart = UI.addPointAsStart;
+    window.toggleDebugMode = toggleDebugMode;
+    window.generateGPX = generateGPX;
+    window.importGPX = importGPX;
+    window.exportGPX = exportGPX;
 
-function createDebugLegendControl() {
-    const LegendControl = L.Control.extend({
-        options: {
-            position: 'topright'
-        },
-        onAdd: function(map) {
-            const div = L.DomUtil.create('div', 'debug-legend-card');
-            div.id = 'debug-legend-card';
-            return div;
-        }
-    });
-    
-    debugLegendControl = new LegendControl();
-    debugLegendControl.addTo(APP.map);
-    
-    updateDebugLegend();
-}
+    // Setup Debug Callback
+    setUpdateRouteStyleCallback(updateRouteStyle);
 
-function updateDebugLegend() {
-    const legendDiv = document.getElementById('debug-legend-card');
-    if (!legendDiv) return;
-    
-    const min = speedStats.min === Infinity ? 0 : speedStats.min;
-    const max = speedStats.max;
-    
-    const legendHTML = `
-        <div style="
-            background: var(--color-surface);
-            border: 1px solid var(--color-border);
-            border-radius: 8px;
-            padding: 12px;
-            font-size: 12px;
-            box-shadow: var(--shadow-md);
-            min-width: 180px;
-            backdrop-filter: blur(8px);
-        ">
-            <div style="
-                margin-bottom: 8px;
-                font-weight: 600;
-                color: var(--color-primary);
-                font-size: 11px;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            ">Speed Range</div>
-            
-            <div style="margin-bottom: 10px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <span style="color: var(--color-text-secondary); font-size: 11px;">Min</span>
-                    <span style="font-weight: 600; color: var(--color-text);">${min.toFixed(0)} km/h</span>
-                </div>
-                <div style="width: 100%; height: 24px; border-radius: 4px; background: linear-gradient(90deg, #8B0000, #FF0000, #FF4500, #FF8C00, #FFD700, #ADFF2F, #90EE90, #32CD32, #00BB00, #00CC99); border: 1px solid var(--color-border); box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);"></div>
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
-                    <span style="color: var(--color-text-secondary); font-size: 11px;">Max</span>
-                    <span style="font-weight: 600; color: var(--color-text);">${max.toFixed(0)} km/h</span>
-                </div>
-            </div>
-            
-            <div style="
-                border-top: 1px solid var(--color-border);
-                padding-top: 8px;
-                color: var(--color-text-secondary);
-                font-size: 10px;
-            ">
-                <div>Total segments: <strong>${speedStats.speeds.length}</strong></div>
-                <div style="margin-top: 4px;">
-                    Avg: <strong>${(speedStats.speeds.reduce((a,b) => a+b, 0) / speedStats.speeds.length).toFixed(1)} km/h</strong>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    legendDiv.innerHTML = legendHTML;
-}
-
-function getAdaptiveSpeedColor(speed, minSpeed, maxSpeed) {
-    const range = maxSpeed - minSpeed;
-    
-    if (range === 0) {
-        return '#ffd3b6';
-    }
-    
-    const normalized = (speed - minSpeed) / range;
-    
-    const colorStops = [
-        { pos: 0.0,  color: '#8B0000' },
-        { pos: 0.11, color: '#FF0000' },
-        { pos: 0.22, color: '#FF4500' },
-        { pos: 0.33, color: '#FF8C00' },
-        { pos: 0.44, color: '#FFD700' },
-        { pos: 0.55, color: '#ADFF2F' },
-        { pos: 0.66, color: '#90EE90' },
-        { pos: 0.77, color: '#32CD32' },
-        { pos: 0.88, color: '#00BB00' },
-        { pos: 1.0,  color: '#00CC99' }
+    // Initial Route State (1 start, 1 dest)
+    APP.routePoints = [
+        { id: APP.nextPointId++, lat: null, lng: null, address: '', type: 'start' },
+        { id: APP.nextPointId++, lat: null, lng: null, address: '', type: 'dest' }
     ];
-    
-    for (let i = 0; i < colorStops.length - 1; i++) {
-        if (normalized >= colorStops[i].pos && normalized <= colorStops[i + 1].pos) {
-            const range = colorStops[i + 1].pos - colorStops[i].pos;
-            const factor = (normalized - colorStops[i].pos) / range;
-            return interpolateColor(colorStops[i].color, colorStops[i + 1].color, factor);
-        }
-    }
-    
-    return colorStops[colorStops.length - 1].color;
-}
 
-function interpolateColor(color1, color2, factor) {
-    const c1 = parseInt(color1.substring(1), 16);
-    const c2 = parseInt(color2.substring(1), 16);
-    
-    const r1 = (c1 >> 16) & 255;
-    const g1 = (c1 >> 8) & 255;
-    const b1 = c1 & 255;
-    
-    const r2 = (c2 >> 16) & 255;
-    const g2 = (c2 >> 8) & 255;
-    const b2 = c2 & 255;
-    
-    const r = Math.round(r1 + (r2 - r1) * factor);
-    const g = Math.round(g1 + (g2 - g1) * factor);
-    const b = Math.round(b1 + (b2 - b1) * factor);
-    
-    return '#' + [r, g, b].map(x => {
-        const hex = x.toString(16);
-        return hex.length === 1 ? '0' + hex : hex;
-    }).join('');
-}
+    UI.updatePointTypes();
+    UI.renderRoutePoints();
 
-function getSpeedColor(speed) {
-    if (speed >= 120) return '#0099ff';
-    if (speed >= 100) return '#32b8c6';
-    if (speed >= 60) return '#a8e6cf';
-    if (speed >= 40) return '#ffd3b6';
-    if (speed >= 20) return '#ff6b7a';
-    return '#ff0000';
-}
-
-function parseMVTTile(arrayBuffer) {
-    const view = new Uint8Array(arrayBuffer);
-    const features = [];
-    
-    try {
-        let pos = 0;
-        
-        while (pos < view.length) {
-            const byte = view[pos];
-            const fieldNum = byte >> 3;
-            const wireType = byte & 0x07;
-            pos++;
-            
-            if (fieldNum === 3 && wireType === 2) {
-                const [len, lenSize] = readVarIntInfo(view, pos);
-                pos += lenSize;
-                
-                const layerEnd = pos + len;
-                const layer = decodePBFLayer(view, pos, layerEnd);
-                
-                if (layer.name === 'speeds' && layer.features) {
-                    layer.features.forEach((feature, fIdx) => {
-                        const props = {};
-                        
-                        if (feature.tags && layer.keys && layer.values) {
-                            for (let i = 0; i < feature.tags.length; i += 2) {
-                                const keyIdx = feature.tags[i];
-                                const valIdx = feature.tags[i + 1];
-                                
-                                if (layer.keys[keyIdx] !== undefined && layer.values[valIdx] !== undefined) {
-                                    const key = layer.keys[keyIdx];
-                                    const val = layer.values[valIdx];
-                                    props[key] = val;
-                                }
-                            }
-                        }
-                        
-                        let speedValue = 0;
-                        if (props.speed !== undefined) {
-                            speedValue = typeof props.speed === 'number' ? Math.round(props.speed) : parseInt(props.speed) || 0;
-                        }
-                        
-                        features.push({
-                            speed: speedValue,
-                            geometry: decodeGeometry(feature.geometry || []),
-                            properties: props
-                        });
-                    });
+    // Initial UI Elements Setup
+    const initialInput = document.getElementById('initialSearchInput');
+    if (initialInput) {
+        UI.attachAutocompleteToInput(initialInput, 'initial', {
+            onSelect: ({ display, lat, lon }) => {
+                if (APP.routePoints.length > 0) {
+                    APP.routePoints[0].lat = lat;
+                    APP.routePoints[0].lng = lon;
+                    APP.routePoints[0].address = display;
                 }
-                
-                pos = layerEnd;
-            } else if (wireType === 0) {
-                pos = skipVarInt(view, pos);
-            } else if (wireType === 2) {
-                const [len, lenSize] = readVarIntInfo(view, pos);
-                pos += lenSize + len;
-            } else {
-                pos++;
-            }
-        }
-    } catch (e) {
-        console.error('MVT parse error:', e);
-    }
-    
-    return features;
-}
 
-function decodePBFLayer(view, start, end) {
-    const layer = {
-        name: '',
-        keys: [],
-        values: [],
-        features: []
-    };
-    
-    let pos = start;
-    
-    try {
-        while (pos < end) {
-            const byte = view[pos];
-            const fieldNum = byte >> 3;
-            const wireType = byte & 0x07;
-            pos++;
-            
-            if (fieldNum === 1 && wireType === 2) {
-                const [len, lenSize] = readVarIntInfo(view, pos);
-                pos += lenSize;
-                layer.name = new TextDecoder().decode(view.slice(pos, pos + len));
-                pos += len;
-            } else if (fieldNum === 2 && wireType === 2) {
-                const [len, lenSize] = readVarIntInfo(view, pos);
-                pos += lenSize;
-                
-                const featureEnd = pos + len;
-                const feature = decodePBFFeature(view, pos, featureEnd);
-                layer.features.push(feature);
-                pos = featureEnd;
-            } else if (fieldNum === 3 && wireType === 2) {
-                const [len, lenSize] = readVarIntInfo(view, pos);
-                pos += lenSize;
-                const key = new TextDecoder().decode(view.slice(pos, pos + len));
-                layer.keys.push(key);
-                pos += len;
-            } else if (fieldNum === 4 && wireType === 2) {
-                const [len, lenSize] = readVarIntInfo(view, pos);
-                pos += lenSize;
-                const valStart = pos;
-                pos += len;
-                
-                const value = decodeTileValue(view.slice(valStart, pos));
-                layer.values.push(value);
-            } else if (wireType === 0) {
-                pos = skipVarInt(view, pos);
-            } else if (wireType === 2) {
-                const [len, lenSize] = readVarIntInfo(view, pos);
-                pos += lenSize + len;
-            } else {
-                pos++;
-            }
-        }
-    } catch (e) {
-        console.error('Layer decode error:', e);
-    }
-    
-    return layer;
-}
+                initialInput.value = display;
+                UI.renderRoutePoints();
+                UI.updateMapMarkers();
+                UI.showRouteContent();
 
-function decodeTileValue(view) {
-    if (view.length === 0) return '';
-    
-    let pos = 0;
-    const byte = view[pos];
-    const fieldNum = byte >> 3;
-    const wireType = byte & 0x07;
-    pos++;
-    
-    try {
-        if (wireType === 0) {
-            const [val] = readVarIntInfo(view, pos);
-            return val;
-        } else if (wireType === 1) {
-            const dv = new DataView(view.buffer, view.byteOffset + pos, 8);
-            return dv.getFloat64(0, true);
-        } else if (wireType === 2) {
-            const [len, lenSize] = readVarIntInfo(view, pos);
-            pos += lenSize;
-            try {
-                return new TextDecoder().decode(view.slice(pos, pos + len));
-            } catch (e) {
-                return '';
-            }
-        } else if (wireType === 5) {
-            const dv = new DataView(view.buffer, view.byteOffset + pos, 4);
-            return dv.getFloat32(0, true);
-        }
-    } catch (e) {
-        console.error('Value decode error:', e);
-    }
-    
-    return '';
-}
-
-function decodePBFFeature(view, start, end) {
-    const feature = {
-        id: 0,
-        tags: [],
-        geometry: [],
-        type: 1
-    };
-    
-    let pos = start;
-    
-    try {
-        while (pos < end) {
-            const byte = view[pos];
-            const fieldNum = byte >> 3;
-            const wireType = byte & 0x07;
-            pos++;
-            
-            if (fieldNum === 1 && wireType === 0) {
-                const [val, size] = readVarIntInfo(view, pos);
-                feature.id = val;
-                pos += size;
-            } else if (fieldNum === 2 && wireType === 2) {
-                const [len, lenSize] = readVarIntInfo(view, pos);
-                pos += lenSize;
-                
-                const tagEnd = pos + len;
-                while (pos < tagEnd) {
-                    const [val, size] = readVarIntInfo(view, pos);
-                    feature.tags.push(val);
-                    pos += size;
+                if (APP.map) {
+                    APP.map.setView([lat, lon], 14, { animate: true });
                 }
-            } else if (fieldNum === 3 && wireType === 0) {
-                const [val, size] = readVarIntInfo(view, pos);
-                feature.type = val;
-                pos += size;
-            } else if (fieldNum === 4 && wireType === 2) {
-                const [len, lenSize] = readVarIntInfo(view, pos);
-                pos += lenSize;
-                
-                const geoEnd = pos + len;
-                while (pos < geoEnd) {
-                    const [val, size] = readVarIntInfo(view, pos);
-                    feature.geometry.push(val);
-                    pos += size;
-                }
-            } else if (wireType === 0) {
-                pos = skipVarInt(view, pos);
-            } else if (wireType === 2) {
-                const [len, lenSize] = readVarIntInfo(view, pos);
-                pos += lenSize + len;
-            } else {
-                pos++;
             }
-        }
-    } catch (e) {
-        console.error('Feature decode error:', e);
+        });
     }
-    
-    return feature;
-}
 
-function decodeGeometry(geometry) {
-    const rings = [];
-    let x = 0, y = 0;
-    let ring = [];
-    let i = 0;
-    
-    while (i < geometry.length) {
-        const cmd = geometry[i] & 0x07;
-        const count = geometry[i] >> 3;
-        i++;
-        
-        if (cmd === 1) {
-            for (let j = 0; j < count && i < geometry.length; j++) {
-                const dx = zigzagDecode(geometry[i++]);
-                const dy = i < geometry.length ? zigzagDecode(geometry[i++]) : 0;
-                x += dx;
-                y += dy;
-                ring.push({ x, y });
-            }
-        } else if (cmd === 2) {
-            for (let j = 0; j < count && i < geometry.length; j++) {
-                const dx = zigzagDecode(geometry[i++]);
-                const dy = i < geometry.length ? zigzagDecode(geometry[i++]) : 0;
-                x += dx;
-                y += dy;
-                ring.push({ x, y });
-            }
-        } else if (cmd === 7) {
-            if (ring.length > 0) {
-                rings.push(ring);
-                ring = [];
-            }
-        }
+    // Initial UI Elements Setup
+    const debugBtn = document.getElementById('debugToggleBtn');
+    if (debugBtn && CONFIG.ENABLE_DEBUG_MODE) {
+        debugBtn.addEventListener('click', toggleDebugMode);
     }
-    
-    if (ring.length > 0) {
-        rings.push(ring);
-    }
-    
-    return rings;
-}
 
-function readVarIntInfo(view, pos) {
-    let value = 0;
-    let shift = 0;
-    let size = 0;
-    while (pos < view.length && view[pos] >= 0x80) {
-        value |= (view[pos] & 0x7f) << shift;
-        shift += 7;
-        pos++;
-        size++;
+    const darkModeBtn = document.getElementById('darkModeToggleBtn');
+    if (darkModeBtn) {
+        darkModeBtn.addEventListener('click', toggleDarkMode);
     }
-    if (pos < view.length) {
-        value |= view[pos] << shift;
-        size++;
-    }
-    return [value, size];
-}
 
-function skipVarInt(view, pos) {
-    while (pos < view.length && view[pos] >= 0x80) pos++;
-    return pos + 1;
-}
+    const importBtn = document.getElementById('importGpxHeaderBtn');
+    if (importBtn) importBtn.addEventListener('click', importGPX);
 
-function zigzagDecode(n) {
-    return (n >> 1) ^ -(n & 1);
-}
+    const exportBtn = document.getElementById('exportGpxHeaderBtn');
+    if (exportBtn) exportBtn.addEventListener('click', () => exportGPX());
 
-function removeDebugVisualization() {
-    if (debugTileLayer) {
-        if (APP.map) APP.map.removeLayer(debugTileLayer);
-        debugTileLayer = null;
-    }
-    if (debugLegendControl) {
-        if (APP.map) APP.map.removeControl(debugLegendControl);
-        debugLegendControl = null;
-    }
-    speedStats = { min: Infinity, max: 0, speeds: [] };
-}
-
-function updateRouteStyle() {
-    if (!APP.routeLayer) return;
-    
-    APP.routeLayer.eachLayer(layer => {
-        if (layer.setStyle) {
-            if (debugMode) {
-                layer.setStyle({
-                    dashArray: '5, 5',
-                    opacity: 0.6,
-                    weight: 3
-                });
-            } else {
-                layer.setStyle({
-                    dashArray: 'none',
-                    opacity: 0.8,
-                    weight: 4
-                });
-            }
+    // Map Event Listeners
+    APP.map.on('click', (e) => {
+        if (!APP.routePolylineMouseDown && !APP.isDraggingMarker) {
+            UI.handleMapClick(e.latlng); // Need to implement/export handleMapClick in UI
         }
     });
-}
+});
 
 
-
-// ==================== DEBOUNCE ====================
+// ==================== ROUTE CALCULATION ====================
 
 function debouncedCalculateRoute() {
     clearTimeout(APP.calculateRouteTimer);
     APP.calculateRouteTimer = setTimeout(calculateRoute, 500);
 }
 
-debouncedCalculateRoute.cancel = function() {
+debouncedCalculateRoute.cancel = function () {
     clearTimeout(APP.calculateRouteTimer);
 };
 
@@ -674,67 +108,9 @@ function throttledPreviewRouteCalculation() {
     }
 }
 
-// ==================== HELPER FUNCTIONS ====================
-
-function updatePointTypes() {
-    if (APP.routePoints.length === 0) return;
-    APP.routePoints.forEach((point, index) => {
-        if (index === 0) {
-            point.type = 'start';
-        } else if (index === APP.routePoints.length - 1 && APP.routePoints.length > 1) {
-            point.type = 'dest';
-        } else {
-            point.type = 'waypoint';
-        }
-    });
-}
-
-function removePoint(id) {
-    APP.routePoints = APP.routePoints.filter(p => p.id !== id);
-    if (APP.routePoints.length === 1) {
-        APP.routePoints.push({
-            id: APP.nextPointId++,
-            lat: null,
-            lng: null,
-            address: '',
-            type: 'dest'
-        });
-    }
-    updatePointTypes();
-    renderRoutePoints();
-    updateMapMarkers();
-    debouncedCalculateRoute();
-}
-
-function updatePointAddress(id, newAddress, newLat, newLng) {
-    const point = APP.routePoints.find(p => p.id === id);
-    if (point) {
-        point.address = newAddress;
-        if (newLat !== undefined && newLng !== undefined) {
-            point.lat = newLat;
-            point.lng = newLng;
-        }
-    }
-}
-
-function addPoint(lat, lng, address) {
-    const newPoint = {
-        id: APP.nextPointId++,
-        lat: parseFloat(lat.toFixed(4)),
-        lng: parseFloat(lng.toFixed(4)),
-        address: address,
-        type: 'start'
-    };
-    APP.routePoints.push(newPoint);
-    updatePointTypes();
-    renderRoutePoints();
-    updateMapMarkers();
-    debouncedCalculateRoute();
-}
-
 async function calculateRoute() {
     const validPoints = APP.routePoints.filter(p => p.lat !== null && p.lng !== null);
-    
+
     if (validPoints.length < 2) {
         APP.routeLayer.clearLayers();
         APP.currentPolyline = null;
@@ -744,21 +120,21 @@ async function calculateRoute() {
     try {
         const coordString = validPoints.map(c => `${c.lng},${c.lat}`).join(';');
         const url = `${CONFIG.OSRMAPI}/route/v1/driving/${coordString}?overview=full&geometries=geojson&steps=true&annotations=distance,duration`;
-        
+
         const response = await fetch(url);
         if (!response.ok) return;
-        
+
         const result = await response.json();
         if (result.code !== 'Ok') return;
-        
+
         APP.currentRoute = result.routes[0];
         // Remove any existing preview marker before clearing old route layers
         removeRoutePreview();
         APP.routeLayer.clearLayers();
-        
+
         if (APP.routeMouseMoveHandler) APP.map.off('mousemove', APP.routeMouseMoveHandler);
         if (APP.routeMouseUpHandler) APP.map.off('mouseup', APP.routeMouseUpHandler);
-        
+
         const routePolyline = L.geoJSON(APP.currentRoute.geometry, {
             style: {
                 color: '#32b8c6',
@@ -770,210 +146,164 @@ async function calculateRoute() {
             },
             interactive: true
         }).addTo(APP.routeLayer);
-        
+
         updateRouteStyle();
         APP.currentPolyline = routePolyline;
 
-        // show a preview ring when hovering over the route
+        // Route Interaction
         routePolyline.on('mousemove', (e) => {
             if (APP.routePolylineMouseDown) return;
             const closest = findClosestPointOnPolyline(e.latlng);
             if (closest) {
                 createOrUpdateRoutePreview(closest);
-                // Also draw vertical line on elevation chart
-                if (APP.elevationData && APP.elevationData.length > 0) {
-                    drawElevationCursor(closest);
-                }
                 if (APP.map && APP.map._container) APP.map._container.style.cursor = 'pointer';
             }
         });
 
         routePolyline.on('mouseout', () => {
             removeRoutePreview();
-            // Clear elevation cursor
-            if (APP.elevationData) {
-                renderElevationProfile(APP.elevationData);
-            }
             if (APP.map && APP.map._container) APP.map._container.style.cursor = '';
         });
-        
-        routePolyline.on('mousedown', (e) => {
-            if (e.originalEvent.button !== 0) return;
-            // hide preview when user begins interacting with route
-            removeRoutePreview();
 
-            APP.routeClickJustHappened = true;
-            setTimeout(() => { APP.routeClickJustHappened = false; }, 150);
-
-            // Use expanded hit-area to find a valid closest point (returns null if outside tolerance)
-            const alt = findClosestPointOnPolyline(e.latlng);
-            if (!alt) return; // click not close enough to route
-
-            const latlng = L.latLng(alt.lat, alt.lng);
-            const clickPoint = { lat: latlng.lat, lng: latlng.lng };
-            let closestSegmentIndex = alt.segmentIndex || 0;
-            let polylinePoints = alt.latlngs || [];
-            let minDistance = Infinity;
-            
-            const geoJSONLayers = APP.currentPolyline && APP.currentPolyline._layers ? APP.currentPolyline._layers : {};
-            for (let layerId in geoJSONLayers) {
-                const layer = geoJSONLayers[layerId];
-                if (layer.getLatLngs && typeof layer.getLatLngs === 'function') {
-                    polylinePoints = layer.getLatLngs();
-                    
-                    for (let i = 0; i < polylinePoints.length - 1; i++) {
-                        const dist = distanceToLineSegment(clickPoint, polylinePoints[i], polylinePoints[i + 1]);
-                        if (dist < minDistance) {
-                            minDistance = dist;
-                            closestSegmentIndex = i;
-                        }
-                    }
-                }
-            }
-            
-            // Find which route segment the click is closest to
-            // We need to find the closest point on the route line, then determine
-            // which two waypoints that point lies between
-            
-            const validIndices = [];
-            APP.routePoints.forEach((p, idx) => {
-                if (p.lat !== null && p.lng !== null) {
-                    validIndices.push(idx);
-                }
-            });
-            
-            // Find the segment that the click is closest to
-            // by checking distance to each segment between consecutive waypoints
-            let closestSegmentIdx = 0;
-            let closestSegmentDist = Infinity;
-            
-            for (let i = 0; i < validIndices.length - 1; i++) {
-                const startPt = APP.routePoints[validIndices[i]];
-                const endPt = APP.routePoints[validIndices[i + 1]];
-                
-                // Calculate distance from click to this segment
-                const dist = distanceToLineSegment(clickPoint,
-                    { lat: startPt.lat, lng: startPt.lng },
-                    { lat: endPt.lat, lng: endPt.lng }
-                );
-                
-                if (dist < closestSegmentDist) {
-                    closestSegmentDist = dist;
-                    closestSegmentIdx = i;
-                }
-            }
-            
-            // Insert AFTER the first waypoint of the closest segment
-            // This ensures the new point gets the correct sequential number
-            const insertIndex = validIndices[closestSegmentIdx] + 1;
-            
-            const newPoint = {
-                id: APP.nextPointId++,
-                lat: parseFloat(latlng.lat.toFixed(4)),
-                lng: parseFloat(latlng.lng.toFixed(4)),
-                address: 'Locating...',
-                type: 'waypoint'
-            };
-            
-            APP.routePoints.splice(insertIndex, 0, newPoint);
-            updatePointTypes();
-            renderRoutePoints();
-            updateMapMarkers();
-            debouncedCalculateRoute();
-            
-            APP.waypointBeingDragged = newPoint.id;
-            APP.routePolylineMouseDown = true;
-            APP.isPolylineMouseDown = true;
-            APP.map.dragging.disable();
-            APP.map._container.classList.add('dragging-disabled');
-            
-            e.originalEvent.stopPropagation();
-            e.originalEvent.stopImmediatePropagation();
-            
-            reverseGeocodeWithRateLimit(latlng.lat, latlng.lng).then((address) => {
-                newPoint.address = address;
-                const input = document.getElementById(`input-${newPoint.id}`);
-                if (input) input.value = address;
-                renderRoutePoints();
-            });
-        });
-        
-        APP.routeMouseMoveHandler = (e) => {
-            if (!APP.routePolylineMouseDown) return;
-            
-            if (APP.waypointBeingDragged !== null) {
-                const point = APP.routePoints.find(p => p.id === APP.waypointBeingDragged);
-                if (point && APP.mapMarkers[point.id] && e.latlng) {
-                    const latlng = e.latlng;
-                    if (latlng && latlng.lat && latlng.lng && !isNaN(latlng.lat) && !isNaN(latlng.lng)) {
-                        point.lat = parseFloat(latlng.lat.toFixed(4));
-                        point.lng = parseFloat(latlng.lng.toFixed(4));
-                        
-                        APP.mapMarkers[point.id].setLatLng([point.lat, point.lng]);
-                        throttledPreviewRouteCalculation();
-                        APP.map._container.classList.add('dragging-route');
-                    }
-                }
-            }
-        };
-
-        APP.routeMouseUpHandler = (e) => {
-            if (!APP.routePolylineMouseDown) return;
-            
-            APP.routePolylineMouseDown = false;
-            APP.isPolylineMouseDown = false;
-            APP.map._container.classList.remove('dragging-route');
-            APP.map._container.classList.remove('dragging-disabled');
-            APP.map.dragging.enable();  // RE-ENABLE MAP DRAGGING HERE!
-            
-            if (APP.waypointBeingDragged !== null) {
-                const point = APP.routePoints.find(p => p.id === APP.waypointBeingDragged);
-                if (point) {
-                    reverseGeocodeWithRateLimit(point.lat, point.lng).then((address) => {
-                        point.address = address;
-                        updatePointAddress(APP.waypointBeingDragged, address, point.lat, point.lng);
-                        const input = document.getElementById(`input-${APP.waypointBeingDragged}`);
-                        if (input) input.value = address;
-                        renderRoutePoints();
-                        calculateRoute();
-                    });
-                }
-                APP.waypointBeingDragged = null;
-            }
-        };
+        routePolyline.on('mousedown', handleRoutePolylineMouseDown);
 
         APP.map.on('mousemove', APP.routeMouseMoveHandler || routeMouseMoveHandler);
         APP.map.on('mouseup', APP.routeMouseUpHandler || routeMouseUpHandler);
 
+        // Update Stats
         const distance = APP.currentRoute.distance;
         const duration = APP.currentRoute.duration;
-
-        // Show elevation card and place distance/duration values there
-        const elevCard = document.getElementById('elevationCard');
-        if (elevCard) elevCard.style.display = 'block';
-        const sideScale = document.getElementById('elevationSideScale');
-        if (sideScale) sideScale.style.display = 'flex';
-
-        // Set header values (will be updated after elevation fetch with gain/loss)
         const distEl = document.getElementById('elev-distance-val');
         const durEl = document.getElementById('elev-duration-val');
         if (distEl) distEl.textContent = formatDistance(distance);
         if (durEl) durEl.textContent = formatDuration(duration);
 
-        // fetch elevation and render profile
+        // Show Elevation Card (Simplified)
+        const elevCard = document.getElementById('elevationCard');
+        if (elevCard) elevCard.style.display = 'block';
+
+        // Fetch and Render Elevation
         fetchAndRenderElevation();
 
-        if (debugMode) {
-            // Debug mode is handled by the tile layer
-        }
     } catch (error) {
         console.error('Route calculation failed:', error);
     }
 }
 
+
+// ==================== INTERACTION HELPERS ====================
+
+function handleRoutePolylineMouseDown(e) {
+    if (e.originalEvent.button !== 0) return;
+    removeRoutePreview();
+
+    APP.routeClickJustHappened = true;
+    setTimeout(() => { APP.routeClickJustHappened = false; }, 150);
+
+    const alt = findClosestPointOnPolyline(e.latlng);
+    if (!alt) return;
+
+    const latlng = L.latLng(alt.lat, alt.lng);
+    const clickPoint = { lat: latlng.lat, lng: latlng.lng };
+
+    // Find insertion index
+    const validIndices = [];
+    APP.routePoints.forEach((p, idx) => {
+        if (p.lat !== null && p.lng !== null) {
+            validIndices.push(idx);
+        }
+    });
+
+    let closestSegmentIdx = 0;
+    let closestSegmentDist = Infinity;
+
+    for (let i = 0; i < validIndices.length - 1; i++) {
+        const startPt = APP.routePoints[validIndices[i]];
+        const endPt = APP.routePoints[validIndices[i + 1]];
+        const dist = distanceToLineSegment(clickPoint, startPt, endPt);
+        if (dist < closestSegmentDist) {
+            closestSegmentDist = dist;
+            closestSegmentIdx = i;
+        }
+    }
+
+    const insertIndex = validIndices[closestSegmentIdx] + 1;
+
+    const newPoint = {
+        id: APP.nextPointId++,
+        lat: parseFloat(latlng.lat.toFixed(4)),
+        lng: parseFloat(latlng.lng.toFixed(4)),
+        address: 'Locating...',
+        type: 'waypoint'
+    };
+
+    APP.routePoints.splice(insertIndex, 0, newPoint);
+    UI.updatePointTypes();
+    UI.renderRoutePoints();
+    UI.updateMapMarkers();
+    debouncedCalculateRoute();
+
+    APP.waypointBeingDragged = newPoint.id;
+    APP.routePolylineMouseDown = true;
+    APP.isPolylineMouseDown = true;
+    APP.map.dragging.disable();
+    APP.map._container.classList.add('dragging-disabled');
+
+    e.originalEvent.stopPropagation();
+
+    reverseGeocodeWithRateLimit(latlng.lat, latlng.lng).then((address) => {
+        newPoint.address = address;
+        UI.renderRoutePoints();
+    });
+}
+
+function routeMouseMoveHandler(e) {
+    if (!APP.routePolylineMouseDown) return;
+
+    if (APP.waypointBeingDragged !== null) {
+        const point = APP.routePoints.find(p => p.id === APP.waypointBeingDragged);
+        if (point && APP.mapMarkers[point.id] && e.latlng) {
+            const latlng = e.latlng;
+            point.lat = parseFloat(latlng.lat.toFixed(4));
+            point.lng = parseFloat(latlng.lng.toFixed(4));
+
+            APP.mapMarkers[point.id].setLatLng([point.lat, point.lng]);
+            throttledPreviewRouteCalculation();
+            APP.map._container.classList.add('dragging-route');
+        }
+    }
+}
+
+function routeMouseUpHandler(e) {
+    if (!APP.routePolylineMouseDown) return;
+
+    APP.routePolylineMouseDown = false;
+    APP.isPolylineMouseDown = false;
+    APP.map._container.classList.remove('dragging-route');
+    APP.map._container.classList.remove('dragging-disabled');
+    APP.map.dragging.enable();
+
+    if (APP.waypointBeingDragged !== null) {
+        const point = APP.routePoints.find(p => p.id === APP.waypointBeingDragged);
+        if (point) {
+            reverseGeocodeWithRateLimit(point.lat, point.lng).then((address) => {
+                point.address = address;
+                UI.updatePointAddress(APP.waypointBeingDragged, address, point.lat, point.lng);
+                UI.renderRoutePoints();
+                calculateRoute();
+            });
+        }
+        APP.waypointBeingDragged = null;
+    }
+}
+
+// ==================== UTILS ====================
+
 function distanceToLineSegment(point, lineStart, lineEnd) {
     const dx = lineEnd.lng - lineStart.lng;
     const dy = lineEnd.lat - lineStart.lat;
+    if (dx === 0 && dy === 0) return 0;
+
     let t = ((point.lng - lineStart.lng) * dx + (point.lat - lineStart.lat) * dy) / (dx * dx + dy * dy);
     t = Math.max(0, Math.min(1, t));
 
@@ -986,7 +316,6 @@ function distanceToLineSegment(point, lineStart, lineEnd) {
     return Math.sqrt(ddx * ddx + ddy * ddy);
 }
 
-// Find the closest point on the current polyline to a given latlng
 function findClosestPointOnPolyline(latlng) {
     if (!APP.currentPolyline || !APP.map) return null;
     const clickPoint = { lat: latlng.lat, lng: latlng.lng };
@@ -994,12 +323,8 @@ function findClosestPointOnPolyline(latlng) {
 
     let minPixelDist = Infinity;
     let closest = null;
-    let chosenLatLngs = null;
-    let chosenIndex = 0;
 
     const geoJSONLayers = APP.currentPolyline._layers || {};
-
-    // determine route visual weight (fallback to 5)
     let routeWeight = 5;
     for (let lid in geoJSONLayers) {
         const layer = geoJSONLayers[lid];
@@ -1009,7 +334,7 @@ function findClosestPointOnPolyline(latlng) {
         }
     }
 
-    const thresholdPx = routeWeight * 3; // 3x route width
+    const thresholdPx = routeWeight * 3;
 
     for (let layerId in geoJSONLayers) {
         const layer = geoJSONLayers[layerId];
@@ -1030,7 +355,6 @@ function findClosestPointOnPolyline(latlng) {
                 const cx = a.lng + tt * dx;
                 const cy = a.lat + tt * dy;
 
-                // Convert candidate point to pixel space and measure distance
                 const candidatePixel = APP.map.latLngToLayerPoint([cy, cx]);
                 const pdx = clickPixel.x - candidatePixel.x;
                 const pdy = clickPixel.y - candidatePixel.y;
@@ -1038,28 +362,21 @@ function findClosestPointOnPolyline(latlng) {
 
                 if (pixelDist < minPixelDist) {
                     minPixelDist = pixelDist;
-                    closest = { lat: cy, lng: cx, dist: Math.sqrt(Math.pow(clickPoint.lng - cx, 2) + Math.pow(clickPoint.lat - cy, 2)), pixelDist };
-                    chosenLatLngs = latlngs;
-                    chosenIndex = i;
+                    closest = { lat: cy, lng: cx, dist: pixelDist, pixelDist };
                 }
             }
         }
     }
 
-    // only return closest if within threshold in pixels
     if (closest && minPixelDist <= thresholdPx) {
-        closest.segmentIndex = chosenIndex;
-        closest.latlngs = chosenLatLngs;
         return closest;
     }
 
     return null;
 }
 
-// Create or update the preview marker (a ring with white inner circle)
 function createOrUpdateRoutePreview(point) {
-    if (!point) return;
-    if (!APP.markerLayer) return;
+    if (!point || !APP.markerLayer) return;
 
     const html = `<div class="map-pin-preview"><div class="map-pin-preview-inner"></div></div>`;
 
@@ -1072,21 +389,16 @@ function createOrUpdateRoutePreview(point) {
         });
         APP.previewMarker = L.marker([point.lat, point.lng], { icon, interactive: false, bubblingMouseEvents: false }).addTo(APP.markerLayer);
 
-        // ensure fade-in after element is created - add class to inner element
-        const el = APP.previewMarker.getElement && APP.previewMarker.getElement();
+        const el = APP.previewMarker.getElement();
         if (el) {
-            const inner = el.querySelector && el.querySelector('.map-pin-preview');
-            if (inner) {
-                inner.classList.remove('visible');
-                // small timeout to ensure transition from hidden -> visible
-                setTimeout(() => inner.classList.add('visible'), 20);
-            }
+            const inner = el.querySelector('.map-pin-preview');
+            if (inner) setTimeout(() => inner.classList.add('visible'), 20);
         }
     } else {
         APP.previewMarker.setLatLng([point.lat, point.lng]);
-        const el = APP.previewMarker.getElement && APP.previewMarker.getElement();
+        const el = APP.previewMarker.getElement();
         if (el) {
-            const inner = el.querySelector && el.querySelector('.map-pin-preview');
+            const inner = el.querySelector('.map-pin-preview');
             if (inner && !inner.classList.contains('visible')) {
                 setTimeout(() => inner.classList.add('visible'), 20);
             }
@@ -1097,30 +409,21 @@ function createOrUpdateRoutePreview(point) {
 function removeRoutePreview() {
     if (APP.previewMarker && APP.markerLayer) {
         const el = APP.previewMarker.getElement && APP.previewMarker.getElement();
-        const inner = el && el.querySelector ? el.querySelector('.map-pin-preview') : null;
+        const inner = el && el.querySelector('.map-pin-preview');
         if (inner && inner.classList.contains('visible')) {
-            // remove visible class to start fade-out
             inner.classList.remove('visible');
-            // remove marker after transition completes
             setTimeout(() => {
-                try { APP.markerLayer.removeLayer(APP.previewMarker); } catch (e) {}
+                try { APP.markerLayer.removeLayer(APP.previewMarker); } catch (e) { }
                 APP.previewMarker = null;
             }, 120);
         } else {
-            try { APP.markerLayer.removeLayer(APP.previewMarker); } catch (e) {}
+            try { APP.markerLayer.removeLayer(APP.previewMarker); } catch (e) { }
             APP.previewMarker = null;
         }
     }
 }
 
-// ==================== GPX EXPORT HELPERS ====================
-
-function escapeXml(unsafe) {
-    if (!unsafe) return '';
-    return String(unsafe).replace(/[&<>\"']/g, (c) => {
-        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c];
-    });
-}
+// ==================== GPX (Simplified Placeholders) ====================
 
 function generateGPX(name = 'Route') {
     const date = new Date().toISOString();
@@ -1130,12 +433,20 @@ function generateGPX(name = 'Route') {
     } else {
         coords = APP.routePoints.filter(p => p.lat !== null && p.lng !== null).map(p => [p.lng, p.lat]);
     }
-
     const trkpts = coords.map(([lon, lat]) => `        <trkpt lat="${lat}" lon="${lon}"/>`).join('\n');
-    // Note: Avoid multiple <wpt> entries to prevent some importers from showing multiple import options.
-    const gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Route Planner" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata>\n    <name>${escapeXml(name)}</name>\n    <time>${date}</time>\n  </metadata>\n  <trk>\n    <name>${escapeXml(name)}</name>\n    <trkseg>\n${trkpts}\n    </trkseg>\n  </trk>\n</gpx>`;
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Route Planner">\n  <metadata><name>${name}</name><time>${date}</time></metadata>\n  <trk><name>${name}</name><trkseg>\n${trkpts}\n    </trkseg></trk>\n</gpx>`;
+}
 
-    return gpx;
+function exportGPX(filename = 'route.gpx') {
+    const gpx = generateGPX('Route');
+    const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
 }
 
 function importGPX() {
@@ -1144,9 +455,7 @@ function importGPX() {
     input.accept = '.gpx';
     input.onchange = (e) => {
         const file = e.target.files[0];
-        if (file && file.name.toLowerCase().endsWith('.gpx')) {
-            parseGPXFile(file);
-        }
+        if (file) parseGPXFile(file);
     };
     input.click();
 }
@@ -1158,1321 +467,60 @@ function parseGPXFile(file) {
             const parser = new DOMParser();
             const gpx = parser.parseFromString(e.target.result, 'text/xml');
             const trkpts = gpx.querySelectorAll('trkpt');
-            
-            if (trkpts.length === 0) {
-                alert('No track points found in GPX file');
-                return;
-            }
-            
-            // Clear existing route
+            if (trkpts.length === 0) return;
+
             APP.routePoints = [];
             APP.nextPointId = 1;
-            
-            // Add start point
-            const first = trkpts[0];
-            const startPoint = {
+
+            // Start
+            APP.routePoints.push({
                 id: APP.nextPointId++,
-                lat: parseFloat(first.getAttribute('lat')),
-                lng: parseFloat(first.getAttribute('lon')),
+                lat: parseFloat(trkpts[0].getAttribute('lat')),
+                lng: parseFloat(trkpts[0].getAttribute('lon')),
                 address: 'Locating...',
                 type: 'start'
-            };
-            APP.routePoints.push(startPoint);
-            
-            // Add waypoints (sample every ~10% of points to avoid too many)
+            });
+
+            // Mid
             const step = Math.max(1, Math.floor(trkpts.length / 10));
             for (let i = step; i < trkpts.length - step; i += step) {
-                const pt = trkpts[i];
                 APP.routePoints.push({
                     id: APP.nextPointId++,
-                    lat: parseFloat(pt.getAttribute('lat')),
-                    lng: parseFloat(pt.getAttribute('lon')),
+                    lat: parseFloat(trkpts[i].getAttribute('lat')),
+                    lng: parseFloat(trkpts[i].getAttribute('lon')),
                     address: 'Locating...',
                     type: 'waypoint'
                 });
             }
-            
-            // Add end point
+
+            // End
             const last = trkpts[trkpts.length - 1];
-            const endPoint = {
+            APP.routePoints.push({
                 id: APP.nextPointId++,
                 lat: parseFloat(last.getAttribute('lat')),
                 lng: parseFloat(last.getAttribute('lon')),
                 address: 'Locating...',
                 type: 'dest'
-            };
-            APP.routePoints.push(endPoint);
-            
-            updatePointTypes();
-            renderRoutePoints();
-            updateMapMarkers();
-            showRouteContent();
-            debouncedCalculateRoute();
-            
-            // Center map on route
-            const bounds = L.latLngBounds(APP.routePoints.map(p => [p.lat, p.lng]));
-            APP.map.fitBounds(bounds, { padding: [20, 20] });
-            
-            // Reverse geocode all points
+            });
+
+            UI.updatePointTypes();
+            UI.renderRoutePoints();
+            UI.updateMapMarkers();
+            calculateRoute();
+
+            // Reverse Geocode
             APP.routePoints.forEach(point => {
                 reverseGeocodeWithRateLimit(point.lat, point.lng).then(address => {
                     point.address = address;
                     const input = document.getElementById(`input-${point.id}`);
                     if (input) input.value = address;
-                    renderRoutePoints();
+                    UI.renderRoutePoints();
                 });
             });
-            
+
         } catch (error) {
-            alert('Error parsing GPX file: ' + error.message);
+            console.error(error);
         }
     };
     reader.readAsText(file);
 }
-
-function exportGPX(filename = 'route.gpx') {
-    // generate coords and ensure there is something to export
-    const coordsExist = (APP.currentRoute && APP.currentRoute.geometry && Array.isArray(APP.currentRoute.geometry.coordinates) && APP.currentRoute.geometry.coordinates.length > 0) ||
-        (APP.routePoints && APP.routePoints.some(p => p.lat !== null && p.lng !== null));
-    if (!coordsExist) {
-        alert('No route or coordinates available to export.');
-        return;
-    }
-
-    const gpx = generateGPX('Route');
-    const blob = new Blob([gpx], { type: 'application/gpx+xml' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-}
-
-
-
-
-
-// ------------------ Elevation helpers & profile rendering ------------------
-
-// Haversine distance (meters)
-function haversineDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371000; // meters
-    const toRad = Math.PI / 180;
-    const dLat = (lat2 - lat1) * toRad;
-    const dLon = (lon2 - lon1) * toRad;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1*toRad)*Math.cos(lat2*toRad)*Math.sin(dLon/2)*Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
-}
-
-// Sample route coordinates progressively - start coarse, refine over time
-function sampleRouteCoordinates(coords, intervalMeters = 50) {
-    if (!coords || coords.length === 0) return [];
-    const samples = [];
-
-    let acc = 0;
-    for (let i = 0; i < coords.length - 1; i++) {
-        const [lon1, lat1] = coords[i];
-        const [lon2, lat2] = coords[i + 1];
-        const segLen = haversineDistance(lat1, lon1, lat2, lon2);
-        if (samples.length === 0) samples.push({lat: lat1, lng: lon1, d: 0});
-
-        let t = 0;
-        while (t < segLen) {
-            const nextT = Math.min(intervalMeters - acc, segLen - t);
-            t += nextT;
-            acc += nextT;
-            if (acc >= intervalMeters) {
-                const fraction = t / segLen;
-                const lat = lat1 + (lat2 - lat1) * fraction;
-                const lng = lon1 + (lon2 - lon1) * fraction;
-                samples.push({lat, lng, d: 0});
-                acc = 0;
-            }
-        }
-    }
-
-    const last = coords[coords.length - 1];
-    if (last) samples.push({lat: last[1], lng: last[0], d: 0});
-
-    // compute cumulative distances
-    let cum = 0;
-    for (let i = 0; i < samples.length; i++) {
-        if (i === 0) samples[i].d = 0;
-        else {
-            cum += haversineDistance(samples[i-1].lat, samples[i-1].lng, samples[i].lat, samples[i].lng);
-            samples[i].d = cum;
-        }
-    }
-
-    return samples;
-}
-
-// Progressive elevation fetching
-async function fetchElevationsProgressive(points, onProgress) {
-    if (!points || points.length === 0) return [];
-    
-    // Start with sparse sampling (every 8th point)
-    const indices = [0, points.length - 1]; // Always include start and end
-    const results = new Array(points.length).fill(null);
-    
-    // Fetch initial sparse points
-    const initialIndices = [];
-    for (let i = 0; i < points.length; i += 8) {
-        initialIndices.push(i);
-    }
-    if (!initialIndices.includes(points.length - 1)) {
-        initialIndices.push(points.length - 1);
-    }
-    
-    const initialPoints = initialIndices.map(i => points[i]);
-    const initialElevations = await fetchElevations(initialPoints);
-    
-    initialIndices.forEach((idx, i) => {
-        results[idx] = initialElevations[i];
-    });
-    
-    // Interpolate missing points
-    for (let i = 0; i < results.length; i++) {
-        if (results[i] === null) {
-            // Find surrounding known points
-            let prevIdx = i - 1;
-            while (prevIdx >= 0 && results[prevIdx] === null) prevIdx--;
-            let nextIdx = i + 1;
-            while (nextIdx < results.length && results[nextIdx] === null) nextIdx++;
-            
-            if (prevIdx >= 0 && nextIdx < results.length) {
-                const t = (i - prevIdx) / (nextIdx - prevIdx);
-                results[i] = {
-                    lat: points[i].lat,
-                    lng: points[i].lng,
-                    elev: results[prevIdx].elev + (results[nextIdx].elev - results[prevIdx].elev) * t,
-                    d: points[i].d
-                };
-            }
-        }
-    }
-    
-    if (onProgress) onProgress(results);
-    
-    // Progressively refine - fetch midpoints
-    const refineLevels = [4, 2, 1];
-    for (const step of refineLevels) {
-        const refineIndices = [];
-        for (let i = step; i < points.length; i += step * 2) {
-            if (results[i] && results[i].elev !== undefined && !initialIndices.includes(i)) {
-                continue; // Already have real data
-            }
-            refineIndices.push(i);
-        }
-        
-        if (refineIndices.length > 0) {
-            const refinePoints = refineIndices.map(i => points[i]);
-            const refineElevations = await fetchElevations(refinePoints);
-            
-            refineIndices.forEach((idx, i) => {
-                results[idx] = refineElevations[i];
-            });
-            
-            // Re-interpolate gaps
-            for (let i = 0; i < results.length; i++) {
-                if (!results[i] || results[i].elev === undefined) {
-                    let prevIdx = i - 1;
-                    while (prevIdx >= 0 && (!results[prevIdx] || results[prevIdx].elev === undefined)) prevIdx--;
-                    let nextIdx = i + 1;
-                    while (nextIdx < results.length && (!results[nextIdx] || results[nextIdx].elev === undefined)) nextIdx++;
-                    
-                    if (prevIdx >= 0 && nextIdx < results.length) {
-                        const t = (i - prevIdx) / (nextIdx - prevIdx);
-                        results[i] = {
-                            lat: points[i].lat,
-                            lng: points[i].lng,
-                            elev: results[prevIdx].elev + (results[nextIdx].elev - results[prevIdx].elev) * t,
-                            d: points[i].d
-                        };
-                    }
-                }
-            }
-            
-            if (onProgress) onProgress(results);
-        }
-    }
-    
-    return results;
-}
-
-// Fetch elevation values from either TIFF files or the configured elevation API
-async function fetchElevations(points) {
-    if (!points || points.length === 0) {
-        return null;
-    }
-
-    // Use TIFF-based elevation if configured
-    if (CONFIG.ELEVATION_SOURCE === 'tiff') {
-        try {
-            const results = await getElevations(points);
-            return results;
-        } catch (e) {
-            console.error('[Elevation] TIFF lookup failed:', e);
-            return null;
-        }
-    }
-
-    // Fall back to API-based elevation
-    if (!CONFIG.ELEVATIONAPI) {
-        return null;
-    }
-
-    try {
-        // Open-Elevation compatible POST
-        const locations = points.map(p => ({latitude: p.lat, longitude: p.lng}));
-
-        const url = `${CONFIG.ELEVATIONAPI}/api/v1/lookup`;
-
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ locations })
-        });
-
-        if (!res.ok) {
-            console.error('[Elevation] Response not OK:', res.status, res.statusText);
-            return null;
-        }
-
-        const json = await res.json();
-
-        if (!json || !json.results) {
-            console.error('[Elevation] Invalid response - missing results:', json);
-            return null;
-        }
-
-        const results = json.results.map((r, idx) => ({ lat: r.latitude, lng: r.longitude, elev: r.elevation, d: points[idx].d }));
-
-        return results;
-    } catch (e) {
-        console.error('[Elevation] Fetch failed with error:', e);
-        return null;
-    }
-}
-
-function computeGainLoss(elevArray) {
-    if (elevArray.length < 3) return { gain: 0, loss: 0 };
-    
-    // Apply moving average smoothing (window size 5)
-    const smoothed = [];
-    const windowSize = 5;
-    
-    for (let i = 0; i < elevArray.length; i++) {
-        let sum = 0, count = 0;
-        const start = Math.max(0, i - Math.floor(windowSize / 2));
-        const end = Math.min(elevArray.length - 1, i + Math.floor(windowSize / 2));
-        
-        for (let j = start; j <= end; j++) {
-            sum += elevArray[j].elev;
-            count++;
-        }
-        
-        smoothed.push({ ...elevArray[i], elev: sum / count });
-    }
-    
-    // Calculate gain/loss with 3m threshold on smoothed data
-    const THRESHOLD = 3;
-    let gain = 0, loss = 0;
-    let lastElev = smoothed[0].elev;
-    
-    for (let i = 1; i < smoothed.length; i++) {
-        const diff = smoothed[i].elev - lastElev;
-        
-        if (Math.abs(diff) >= THRESHOLD) {
-            if (diff > 0) {
-                gain += diff;
-            } else {
-                loss += -diff;
-            }
-            lastElev = smoothed[i].elev;
-        }
-    }
-    
-    return { gain: Math.round(gain), loss: Math.round(loss) };
-}
-async function fetchAndRenderElevation() {
-    if (!APP.currentRoute || !APP.currentRoute.geometry || !APP.currentRoute.geometry.coordinates) {
-        return;
-    }
-
-    const coords = APP.currentRoute.geometry.coordinates;
-
-    const samples = sampleRouteCoordinates(coords, 25); // 25m intervals for smoother curve
-    if (!samples || samples.length === 0) {
-        return;
-    }
-
-    // Progressive loading with updates
-    const elevRes = await fetchElevationsProgressive(samples, (partialResults) => {
-        APP.elevationData = partialResults;
-        const { gain, loss } = computeGainLoss(partialResults);
-        const gainEl = document.getElementById('elev-gain-val');
-        const lossEl = document.getElementById('elev-loss-val');
-        if (gainEl) gainEl.textContent = `${gain} m`;
-        if (lossEl) lossEl.textContent = `${loss} m`;
-        renderElevationProfile(partialResults);
-    });
-
-    if (!elevRes) {
-        const elevCard = document.getElementById('elevationCard');
-        if (elevCard) elevCard.style.display = 'none';
-        return;
-    }
-
-    APP.elevationData = elevRes;
-
-    const { gain, loss } = computeGainLoss(elevRes);
-    const gainEl = document.getElementById('elev-gain-val');
-    const lossEl = document.getElementById('elev-loss-val');
-    if (gainEl) gainEl.textContent = `${gain} m`;
-    if (lossEl) lossEl.textContent = `${loss} m`;
-
-    renderElevationProfile(elevRes);
-}
-
-function getGradientColor(grade) {
-    // grade is in percent (e.g., 5 for 5%)
-    if (grade < 3) return null; // use default color
-    if (grade < 6) return 'rgba(255, 255, 150, 0.35)'; // pastel yellow 3-5%
-    if (grade < 11) return 'rgba(255, 200, 150, 0.35)'; // pastel orange 6-10%
-    if (grade < 16) return 'rgba(255, 150, 150, 0.35)'; // pastel red 10-15%
-    if (grade < 21) return 'rgba(200, 150, 255, 0.35)'; // pastel purple 15-20%
-    return 'rgba(100, 100, 100, 0.35)'; // pastel black 20%+
-}
-
-function getGradientStrokeColor(grade) {
-    if (grade < 3) return '#32b8c6'; // default cyan
-    if (grade < 6) return '#CCCC00'; // yellow 3-5%
-    if (grade < 11) return '#FF8C00'; // orange 6-10%
-    if (grade < 16) return '#FF4444'; // red 10-15%
-    if (grade < 21) return '#9932CC'; // purple 15-20%
-    return '#333333'; // dark gray/black 20%+
-}
-
-function renderElevationProfile(data) {
-    const canvas = document.getElementById('elevationCanvas');
-    const tooltip = document.getElementById('elevationTooltip');
-    
-    if (!canvas || !data || !data.length) return;
-
-    // set internal canvas size for crisp rendering
-    const parent = canvas.parentElement || canvas;
-    const width = parent.clientWidth;
-    const height = 100;
-    canvas.width = Math.round(width * devicePixelRatio);
-    canvas.height = Math.round(height * devicePixelRatio);
-    canvas.style.width = width + 'px';
-    canvas.style.height = height + 'px';
-
-    const ctx = canvas.getContext('2d');
-    ctx.scale(devicePixelRatio, devicePixelRatio);
-    ctx.clearRect(0, 0, width, height);
-
-    const elevations = data.map(d => d.elev);
-    const minE = Math.min(...elevations);
-    const maxE = Math.max(...elevations);
-    const pad = 2; // minimal padding to maximize curve width
-    const chartHeight = height - pad * 2;
-    const chartWidth = width - pad * 2;
-
-    // Calculate gradients for each 100m segment
-    const grades = [];
-    const segmentDistance = 100; // meters
-    let currentSegmentStart = 0;
-    
-    for (let i = 0; i < data.length; i++) {
-        // Find the point ~100m ahead
-        let endIdx = i;
-        for (let j = i + 1; j < data.length; j++) {
-            if (data[j].d - data[i].d >= segmentDistance) {
-                endIdx = j;
-                break;
-            }
-        }
-        
-        if (endIdx > i) {
-            const elevDiff = data[endIdx].elev - data[i].elev;
-            const dist = data[endIdx].d - data[i].d;
-            const grade = dist > 0 ? (elevDiff / dist) * 100 : 0;
-            grades.push(grade);
-        } else {
-            grades.push(grades[grades.length - 1] || 0);
-        }
-    }
-
-    // Draw filled areas segment by segment
-    for (let i = 0; i < data.length - 1; i++) {
-        const grade = grades[i];
-        const color = getGradientColor(grade);
-        
-        const x1 = (i / (data.length - 1)) * chartWidth + pad;
-        const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1; // Add 0.1px overlap
-        const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-        const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-        
-        if (color) {
-            // Draw climb fill
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.lineTo(x2, height - pad);
-            ctx.lineTo(x1, height - pad);
-            ctx.closePath();
-            ctx.fillStyle = color;
-            ctx.fill();
-        } else {
-            // Draw default (flat/descent) fill
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.lineTo(x2, height - pad);
-            ctx.lineTo(x1, height - pad);
-            ctx.closePath();
-            ctx.fillStyle = 'rgba(50,184,198,0.12)';
-            ctx.fill();
-        }
-    }
-
-    // Draw stroke line segment by segment with slight overlap
-    for (let i = 0; i < data.length - 1; i++) {
-        const grade = grades[i];
-        const color = getGradientStrokeColor(grade);
-        
-        const x1 = (i / (data.length - 1)) * chartWidth + pad;
-        const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1; // Add 0.1px overlap
-        const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-        const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-        
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'square';
-        ctx.stroke();
-    }
-
-    // draw horizontal markers (start/mid/end)
-    const xAxis = document.getElementById('elevationXAxis');
-    if (xAxis) {
-        const totalKm = (data[data.length - 1].d / 1000);
-        xAxis.innerHTML = `<div>0 km</div><div>${totalKm.toFixed(1)} km</div>`;
-    }
-
-    // draw side scale (min/max) in the sidebar
-    const sideScale = document.getElementById('elevationSideScale');
-    if (sideScale) {
-        sideScale.innerHTML = `<div>${Math.round(maxE)} m</div><div style="opacity:0.6">${Math.round((maxE+minE)/2)} m</div><div>${Math.round(minE)} m</div>`;
-    }
-
-    // attach mouse events
-    canvas.onmousemove = function(evt) {
-        const rect = canvas.getBoundingClientRect();
-        const mouseX = (evt.clientX - rect.left);
-        const rel = Math.max(0, Math.min(1, (mouseX - pad) / (width - pad*2)));
-        const idx = Math.round(rel * (data.length - 1));
-        const point = data[idx];
-        if (!point) return;
-
-        // Calculate gradient at this point
-        let gradient = 0;
-        if (idx > 0 && idx < data.length - 1) {
-            const prevPoint = data[idx - 1];
-            const nextPoint = data[idx + 1];
-            const elevDiff = nextPoint.elev - prevPoint.elev;
-            const distDiff = nextPoint.d - prevPoint.d;
-            gradient = distDiff > 0 ? (elevDiff / distDiff) * 100 : 0;
-        }
-
-        // position tooltip - ensure it stays on screen
-        if (tooltip) {
-            const tooltipWidth = 200;
-            const tooltipHeight = 60;
-            let left = evt.clientX + 10;
-            let top = evt.clientY - tooltipHeight - 10;
-            
-            if (left + tooltipWidth > window.innerWidth) {
-                left = evt.clientX - tooltipWidth - 10;
-            }
-            if (top < 0) {
-                top = evt.clientY + 10;
-            }
-            
-            tooltip.style.left = left + 'px';
-            tooltip.style.top = top + 'px';
-            tooltip.style.display = 'block';
-            
-            const gradientText = gradient > 0 ? `+${gradient.toFixed(1)}%` : `${gradient.toFixed(1)}%`;
-            const gradientColor = Math.abs(gradient) > 8 ? (gradient > 0 ? '#ff4444' : '#44ff44') : '#ccc';
-            
-            tooltip.innerHTML = `
-                <div><strong>${(point.d/1000).toFixed(2)} km</strong> — <strong>${Math.round(point.elev)} m</strong></div>
-                <div style="color: ${gradientColor}; font-weight: 600;">${gradientText} gradient</div>
-            `;
-        }
-
-        // draw vertical line overlay on canvas
-        ctx.clearRect(0, 0, width, height);
-        
-        // redraw with gradient colors
-        for (let i = 0; i < data.length - 1; i++) {
-            const grade = grades[i];
-            const color = getGradientColor(grade);
-            const strokeColor = getGradientStrokeColor(grade);
-            
-            const x1 = (i / (data.length - 1)) * chartWidth + pad;
-            const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1; // Add 0.1px overlap
-            const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-            const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-            
-            // fill
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.lineTo(x2, height - pad);
-            ctx.lineTo(x1, height - pad);
-            ctx.closePath();
-            ctx.fillStyle = color || 'rgba(50,184,198,0.12)';
-            ctx.fill();
-            
-            // stroke
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.strokeStyle = strokeColor;
-            ctx.lineWidth = 2;
-            ctx.lineCap = 'square';
-            ctx.stroke();
-        }
-
-        // vertical line at hover position
-        ctx.beginPath();
-        const vx = (idx / (data.length - 1)) * chartWidth + pad;
-        ctx.moveTo(vx, pad);
-        ctx.lineTo(vx, height - pad);
-        ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        // update map preview at this point
-        createOrUpdateRoutePreview(point);
-    };
-
-    canvas.onmouseleave = function() {
-        const tooltip = document.getElementById('elevationTooltip');
-        if (tooltip) tooltip.style.display = 'none';
-        removeRoutePreview();
-        renderElevationProfile(data);
-    };
-
-}
-
-// Draw vertical cursor line on elevation chart when hovering route
-function drawElevationCursor(routePoint) {
-    if (!APP.elevationData || APP.elevationData.length === 0) return;
-    if (!routePoint || routePoint.lat == null || routePoint.lng == null) return;
-    
-    const data = APP.elevationData;
-    
-    // Find closest point in elevation data by comparing lat/lng
-    let closestIdx = 0;
-    let minDist = Infinity;
-    for (let i = 0; i < data.length; i++) {
-        const dlat = data[i].lat - routePoint.lat;
-        const dlng = data[i].lng - routePoint.lng;
-        const dist = dlat * dlat + dlng * dlng;
-        if (dist < minDist) {
-            minDist = dist;
-            closestIdx = i;
-        }
-    }
-    
-    // Store current index for other functions
-    APP.elevationHoverIndex = closestIdx;
-    
-    // Just re-render - no cursor line needed (per user preference)
-    renderElevationProfile(data);
-}
-
-// ------------------ End elevation helpers ------------------
-
-function updateMapMarkers() {
-    if (!APP.markerLayer) return;
-    APP.markerLayer.clearLayers();
-    APP.mapMarkers = {};
-
-    APP.routePoints.forEach((point, index) => {
-        if (point.lat === null || point.lng === null) return;
-
-        let label, type;
-        if (point.type === 'start') {
-            label = 'A';
-            type = 'start';
-        } else if (point.type === 'dest') {
-            label = 'B';
-            type = 'dest';
-        } else {
-            label = index.toString();
-            type = 'waypoint';
-        }
-
-        const icon = L.divIcon({
-            html: `<div class="map-pin ${type}">${label}</div>`,
-            className: 'leaflet-div-icon',
-            iconSize: [24, 24],
-            iconAnchor: [12, 12]
-        });
-
-        const marker = L.marker([point.lat, point.lng], { icon, draggable: true })
-            .addTo(APP.markerLayer);
-
-        const popupContent = `
-            <div style="padding: 8px; font-size: 12px;">
-                <strong>${point.address || 'Location'}</strong>
-                <button onclick="removePoint(${point.id})" style="
-                    display: block;
-                    margin-top: 8px;
-                    padding: 4px 8px;
-                    background: #ff6b7a;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    font-size: 11px;
-                    width: 100%;
-                ">Remove</button>
-            </div>
-        `;
-        marker.bindPopup(popupContent);
-
-        APP.mapMarkers[point.id] = marker;
-
-        marker.on('dragstart', (e) => {
-            APP.isDraggingMarker = true;
-            APP.draggedMarkerStartPos = { lat: point.lat, lng: point.lng };
-            marker.closePopup();
-        });
-
-        marker.on('drag', (e) => {
-            const pos = e.target.getLatLng();
-            point.lat = parseFloat(pos.lat.toFixed(4));
-            point.lng = parseFloat(pos.lng.toFixed(4));
-            throttledPreviewRouteCalculation();
-        });
-
-        marker.on('dragend', (e) => {
-            APP.isDraggingMarker = false;
-            APP.map.dragging.enable();  // RE-ENABLE MAP DRAGGING HERE TOO!
-            const pos = e.target.getLatLng();
-            const lat = parseFloat(pos.lat.toFixed(4));
-            const lng = parseFloat(pos.lng.toFixed(4));
-            reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-                updatePointAddress(point.id, address, lat, lng);
-                const input = document.getElementById(`input-${point.id}`);
-                if (input) input.value = address;
-                renderRoutePoints();
-                calculateRoute();
-            });
-        });
-    });
-}
-
-function isClickOnRoute(latlng) {
-    // Use the same expanded hit-area logic as hover/preview
-    const closest = findClosestPointOnPolyline(latlng);
-    return !!closest;
-}
-
-function handleRightClick(e) {
-    // Handle both Leaflet events and DOM events
-    if (e.originalEvent && e.originalEvent.preventDefault) {
-        e.originalEvent.preventDefault();
-    } else if (e.preventDefault) {
-        e.preventDefault();
-    }
-    
-    const latlng = e.latlng;
-    if (!latlng) return;
-    
-    let clickedOnRoute = false;
-    if (APP.currentPolyline) {
-        const geoJSONLayers = APP.currentPolyline._layers || {};
-        for (let layerId in geoJSONLayers) {
-            const layer = geoJSONLayers[layerId];
-            if (layer.setStyle) {
-                const bounds = layer.getBounds();
-                if (bounds.contains(latlng)) {
-                    clickedOnRoute = true;
-                    break;
-                }
-            }
-        }
-    }
-    
-    if (clickedOnRoute) return;
-    
-    const contextMenu = document.getElementById('contextMenu');
-    contextMenu.innerHTML = `
-        <div class="context-menu-item" onclick="addPointAsStart(${latlng.lat}, ${latlng.lng})">Set as Start</div>
-        <div class="context-menu-item" onclick="addPointAsDestination(${latlng.lat}, ${latlng.lng})">Set as Destination</div>
-        <div class="context-menu-item" onclick="addPointAsWaypoint(${latlng.lat}, ${latlng.lng})">Add as Waypoint</div>
-    `;
-    
-    contextMenu.style.left = e.originalEvent.clientX + 'px';
-    contextMenu.style.top = e.originalEvent.clientY + 'px';
-    contextMenu.classList.add('active');
-    APP.contextMenuOpen = true;
-}
-
-function addPointAsStart(lat, lng) {
-    reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-        if (APP.routePoints.length > 0 && APP.routePoints[0].lat === null) {
-            APP.routePoints[0].lat = lat;
-            APP.routePoints[0].lng = lng;
-            APP.routePoints[0].address = address;
-        } else {
-            const newPoint = {
-                id: APP.nextPointId++,
-                lat: lat,
-                lng: lng,
-                address: address,
-                type: 'start'
-            };
-            APP.routePoints.unshift(newPoint);
-        }
-        updatePointTypes();
-        renderRoutePoints();
-        updateMapMarkers();
-        debouncedCalculateRoute();
-        document.getElementById('contextMenu').classList.remove('active');
-        APP.contextMenuOpen = false;
-        showRouteContent();
-    });
-}
-
-function addPointAsDestination(lat, lng) {
-    reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-        if (APP.routePoints.length > 0 && APP.routePoints[APP.routePoints.length - 1].lat === null) {
-            APP.routePoints[APP.routePoints.length - 1].lat = lat;
-            APP.routePoints[APP.routePoints.length - 1].lng = lng;
-            APP.routePoints[APP.routePoints.length - 1].address = address;
-        } else {
-            const newPoint = {
-                id: APP.nextPointId++,
-                lat: lat,
-                lng: lng,
-                address: address,
-                type: 'dest'
-            };
-            APP.routePoints.push(newPoint);
-        }
-        updatePointTypes();
-        renderRoutePoints();
-        updateMapMarkers();
-        debouncedCalculateRoute();
-        document.getElementById('contextMenu').classList.remove('active');
-        APP.contextMenuOpen = false;
-    });
-}
-
-function addPointAsWaypoint(lat, lng) {
-    reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-        const newPoint = {
-            id: APP.nextPointId++,
-            lat: lat,
-            lng: lng,
-            address: address,
-            type: 'waypoint'
-        };
-        if (APP.routePoints.length >= 2) {
-            APP.routePoints.splice(APP.routePoints.length - 1, 0, newPoint);
-        } else {
-            APP.routePoints.push(newPoint);
-        }
-        updatePointTypes();
-        renderRoutePoints();
-        updateMapMarkers();
-        debouncedCalculateRoute();
-        document.getElementById('contextMenu').classList.remove('active');
-        APP.contextMenuOpen = false;
-    });
-}
-
-function handleMapClick(latlng) {
-    const contextMenu = document.getElementById('contextMenu');
-    if (APP.contextMenuOpen) {
-        contextMenu.classList.remove('active');
-        APP.contextMenuOpen = false;
-        return;
-    }
-
-    if (APP.routeClickJustHappened) {
-        return;
-    }
-
-    const routeCheck = APP.routePolylineMouseDown;
-    const markerCheck = APP.isDraggingMarker;
-    const polylineCheck = APP.isPolylineMouseDown;
-    const routeLineCheck = isClickOnRoute(latlng);
-
-    if (!latlng || routeCheck || markerCheck || polylineCheck || routeLineCheck) {
-        return;
-    }
-
-    const lat = latlng.lat;
-    const lng = latlng.lng;
-
-    if (APP.lastFocusedInputId !== null) {
-        const point = APP.routePoints.find(p => p.id === APP.lastFocusedInputId);
-        if (point) {
-            const input = document.getElementById(`input-${APP.lastFocusedInputId}`);
-            point.lat = lat;
-            point.lng = lng;
-            point.address = 'Locating...';
-            if (input) input.value = 'Locating...';
-            
-            updatePointTypes();
-            updateMapMarkers();
-            renderRoutePoints();
-            debouncedCalculateRoute();
-            
-            APP.lastFocusedInputId = null;
-            
-            reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-                point.address = address;
-                if (input) input.value = address;
-                renderRoutePoints();
-            });
-        }
-        return;
-    }
-
-    const startPoint = APP.routePoints.find(p => p.type === 'start');
-    const destPoint = APP.routePoints.find(p => p.type === 'dest');
-    
-    const hasStart = startPoint && startPoint.lat !== null;
-    const hasDestination = destPoint && destPoint.lng !== null;
-    
-    if (!hasStart) {
-        APP.routePoints[0].lat = lat;
-        APP.routePoints[0].lng = lng;
-        APP.routePoints[0].address = 'Locating...';
-        renderRoutePoints();
-        updateMapMarkers();
-        showRouteContent();
-        
-        reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-            APP.routePoints[0].address = address;
-            renderRoutePoints();
-        });
-    } else if (!hasDestination) {
-        APP.routePoints[1].lat = lat;
-        APP.routePoints[1].lng = lng;
-        APP.routePoints[1].address = 'Locating...';
-        renderRoutePoints();
-        updateMapMarkers();
-        debouncedCalculateRoute();
-        
-        reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-            APP.routePoints[1].address = address;
-            renderRoutePoints();
-        });
-    } else {
-        destPoint.type = 'waypoint';
-        
-        const newDest = {
-            id: APP.nextPointId++,
-            lat: lat,
-            lng: lng,
-            address: 'Locating...',
-            type: 'dest'
-        };
-        APP.routePoints.push(newDest);
-        
-        updatePointTypes();
-        renderRoutePoints();
-        updateMapMarkers();
-        debouncedCalculateRoute();
-        
-        reverseGeocodeWithRateLimit(lat, lng).then((address) => {
-            newDest.address = address;
-            renderRoutePoints();
-        });
-    }
-}
-
-// ==================== UI FUNCTIONS ====================
-
-function showRouteContent() {
-    document.getElementById('initialSearch').style.display = 'none';
-    document.getElementById('routeContent').style.display = 'block';
-}
-
-function hideRouteContent() {
-    document.getElementById('initialSearch').style.display = 'block';
-    document.getElementById('routeContent').style.display = 'none';
-}
-
-function renderRoutePoints() {
-    const container = document.getElementById('routePointsList');
-    container.innerHTML = '';
-
-    APP.routePoints.forEach((point, index) => {
-        let label, badgeClass;
-        if (point.type === 'start') {
-            label = 'A';
-            badgeClass = 'point-type-start';
-        } else if (point.type === 'dest') {
-            label = 'B';
-            badgeClass = 'point-type-dest';
-        } else {
-            label = index.toString();
-            badgeClass = 'point-type-waypoint';
-        }
-
-        const placeholder = point.type === 'start' ? 'Start Point' : point.type === 'dest' ? 'Destination' : 'Waypoint';
-
-        const div = document.createElement('div');
-        div.className = 'route-point-item';
-        div.draggable = true;
-        div.dataset.id = point.id;
-
-        div.innerHTML = `
-            <button class="btn-drag" title="Drag to reorder">☰</button>
-            <div class="point-type-badge ${badgeClass}">${label}</div>
-            <div class="address-input-wrapper">
-                <input type="text" id="input-${point.id}" value="${point.address}" placeholder="${placeholder}">
-            </div>
-            <button class="btn-danger" onclick="removePoint(${point.id})">✕</button>
-        `;
-
-        container.appendChild(div);
-
-        const input = document.getElementById(`input-${point.id}`);
-        input.classList.add('search-input');
-        input.addEventListener('focus', () => {
-            APP.lastFocusedInputId = point.id;
-        });
-
-        // clicking the point-type badge should center the map on the point
-        const badge = div.querySelector('.point-type-badge');
-        if (badge) {
-            badge.style.cursor = 'pointer';
-            badge.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (point.lat !== null && point.lng !== null && APP.map) {
-                    // keep current zoom level
-                    APP.map.setView([point.lat, point.lng], APP.map.getZoom(), { animate: true });
-                }
-            });
-        }
-
-        input.addEventListener('click', (e) => {
-            e.stopPropagation();
-        });
-
-        // Attach autocomplete to each dynamically created input (idempotent per DOM element)
-        if (!input.dataset.autocompleteAttached) {
-            attachAutocompleteToInput(input, point.id, {
-                onSelect: ({ display, lat, lon }) => {
-                    const dataId = input.dataset.pointId;
-                    if (dataId === 'initial') {
-                        APP.routePoints[0].lat = lat;
-                        APP.routePoints[0].lng = lon;
-                        APP.routePoints[0].address = display;
-                    } else {
-                        const pid = parseInt(dataId, 10);
-                        const p = APP.routePoints.find(x => x.id === pid);
-                        if (p) {
-                            p.lat = lat;
-                            p.lng = lon;
-                            p.address = display;
-                        }
-                    }
-
-                    input.value = display;
-                    renderRoutePoints();
-                    updateMapMarkers();
-                    debouncedCalculateRoute();
-                    showRouteContent();
-                }
-            });
-            input.dataset.autocompleteAttached = '1';
-        }
-
-        div.addEventListener('dragstart', (e) => {
-            APP.draggedElement = div;
-            e.dataTransfer.effectAllowed = 'move';
-        });
-
-        div.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-            
-            // Remove existing indicator
-            document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
-            
-            // Show drop indicator line between elements
-            const rect = div.getBoundingClientRect();
-            const midpoint = rect.top + rect.height / 2;
-            const isTopHalf = e.clientY < midpoint;
-            
-            // Store the drop position for use in drop event
-            div.dataset.dropBefore = isTopHalf ? 'true' : 'false';
-            
-            const indicator = document.createElement('div');
-            indicator.className = 'drop-indicator-line';
-            indicator.style.cssText = 'position:absolute;left:0;right:0;height:2px;background:#32b8c6;pointer-events:none;z-index:100;';
-            
-            const container = div.parentElement;
-            if (isTopHalf) {
-                // Insert before this element (gap is 8px, line is 2px, so center at -5px)
-                indicator.style.top = (div.offsetTop - 5) + 'px';
-            } else {
-                // Insert after this element (gap is 8px, line is 2px, so center at +3px)
-                indicator.style.top = (div.offsetTop + div.offsetHeight + 3) + 'px';
-            }
-            
-            container.style.position = 'relative';
-            container.appendChild(indicator);
-        });
-
-        div.addEventListener('drop', (e) => {
-            e.preventDefault();
-            
-            // Remove drop indicator
-            document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
-            
-            if (!APP.draggedElement || APP.draggedElement === div) return;
-
-            const fromIndex = APP.routePoints.findIndex(p => p.id == APP.draggedElement.dataset.id);
-            const toIndex = APP.routePoints.findIndex(p => p.id == div.dataset.id);
-            const dropBefore = div.dataset.dropBefore === 'true';
-
-            if (fromIndex !== -1 && toIndex !== -1) {
-                const [removed] = APP.routePoints.splice(fromIndex, 1);
-                
-                // Adjust target index if needed
-                let insertIndex = toIndex;
-                if (fromIndex < toIndex && !dropBefore) {
-                    // Moving down and dropping after: no adjustment needed
-                } else if (fromIndex < toIndex && dropBefore) {
-                    // Moving down and dropping before: adjust by -1
-                    insertIndex = toIndex - 1;
-                } else if (fromIndex > toIndex && !dropBefore) {
-                    // Moving up and dropping after: adjust by +1
-                    insertIndex = toIndex + 1;
-                }
-                // Moving up and dropping before: no adjustment needed
-                
-                APP.routePoints.splice(insertIndex, 0, removed);
-                updatePointTypes();
-                renderRoutePoints();
-                updateMapMarkers();
-                debouncedCalculateRoute();
-            }
-            
-            delete div.dataset.dropBefore;
-        });
-
-        div.addEventListener('dragend', () => {
-            APP.draggedElement = null;
-            // Remove any remaining drop indicators
-            document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
-        });
-    });
-}
-
-function addNewWaypoint() {
-    const newPoint = {
-        id: APP.nextPointId++,
-        lat: null,
-        lng: null,
-        address: '',
-        type: 'waypoint'
-    };
-    
-    if (APP.routePoints.length >= 2) {
-        APP.routePoints.splice(APP.routePoints.length - 1, 0, newPoint);
-    } else {
-        APP.routePoints.push(newPoint);
-    }
-    
-    updatePointTypes();
-    renderRoutePoints();
-}
-
-// ==================== INITIALIZATION ====================
-
-function initMap() {
-    APP.map = L.map('map').setView(CONFIG.MAPCENTER, CONFIG.MAPZOOM);
-    APP.routeLayer = L.featureGroup().addTo(APP.map);
-    APP.markerLayer = L.featureGroup().addTo(APP.map);
-
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors',
-        maxZoom: 19
-    }).addTo(APP.map);
-
-    if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition((pos) => {
-            const { latitude, longitude } = pos.coords;
-            APP.map.setView([latitude, longitude], 12);
-        }, (error) => {
-            // Geolocation not available in this browser or permission denied
-        });
-    }
-
-    const debugBtn = document.getElementById('debugToggleBtn');
-    if (debugBtn && CONFIG.ENABLE_DEBUG_MODE) {
-        debugBtn.addEventListener('click', toggleDebugMode);
-    }
-
-    APP.map.on('click', (e) => {
-        if (!APP.routePolylineMouseDown && !APP.isDraggingMarker) {
-            handleMapClick(e.latlng);
-        }
-    });
-
-    APP.map.on('contextmenu', handleRightClick);
-
-    document.addEventListener('click', (e) => {
-        if (!e.target.closest('#contextMenu')) {
-            document.getElementById('contextMenu').classList.remove('active');
-            APP.contextMenuOpen = false;
-        }
-    });
-    
-    // Add drag-and-drop to sidebar
-    const sidebar = document.querySelector('.sidebar-card');
-    if (sidebar) {
-        sidebar.addEventListener('dragover', (e) => {
-            // Only show drop indicator if dragging files from outside
-            if (e.dataTransfer.types.includes('Files')) {
-                e.preventDefault();
-                e.stopPropagation();
-                sidebar.classList.add('drag-active');
-                
-                // Show drop indicator
-                let dropIndicator = document.getElementById('dropIndicator');
-                if (!dropIndicator) {
-                    dropIndicator = document.createElement('div');
-                    dropIndicator.id = 'dropIndicator';
-                    dropIndicator.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:18px;font-weight:600;color:#32b8c6;pointer-events:none;z-index:10;background:rgba(35,26,26,0.95);padding:20px;border-radius:8px;';
-                    dropIndicator.textContent = 'Drop to Import';
-                    sidebar.appendChild(dropIndicator);
-                }
-            }
-        });
-        
-        sidebar.addEventListener('dragleave', (e) => {
-            if (e.target === sidebar) {
-                sidebar.classList.remove('drag-active');
-                const dropIndicator = document.getElementById('dropIndicator');
-                if (dropIndicator) dropIndicator.remove();
-            }
-        });
-        
-        sidebar.addEventListener('drop', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            sidebar.classList.remove('drag-active');
-            const dropIndicator = document.getElementById('dropIndicator');
-            if (dropIndicator) dropIndicator.remove();
-            
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                const file = files[0];
-                if (file.name.toLowerCase().endsWith('.gpx')) {
-                    parseGPXFile(file);
-                }
-            }
-        });
-    }
-}
-
-// ========== AUTOCOMPLETE HELPERS ==========
-
-
-
-
-
-
-
-
-function initializeSearchUI() {
-    const searchInput = document.getElementById('initialSearchInput');
-
-    APP.routePoints = [
-        { id: APP.nextPointId++, lat: null, lng: null, address: '', type: 'start' },
-        { id: APP.nextPointId++, lat: null, lng: null, address: '', type: 'dest' }
-    ];
-
-    // Attach autocomplete to initial search input
-    attachAutocompleteToInput(searchInput, 'initial', {
-        onSelect: ({ display, lat, lon }) => {
-            // update first point (start) with selected location
-            if (!APP.routePoints || APP.routePoints.length === 0) {
-                APP.routePoints = [ { id: APP.nextPointId++, lat: lat, lng: lon, address: display, type: 'start' } ];
-            } else {
-                APP.routePoints[0].lat = lat;
-                APP.routePoints[0].lng = lon;
-                APP.routePoints[0].address = display;
-            }
-
-            searchInput.value = display;
-            renderRoutePoints();
-            updateMapMarkers();
-            debouncedCalculateRoute();
-            showRouteContent();
-        }
-    });
-    searchInput.dataset.autocompleteAttached = '1';
-
-    renderRoutePoints();
-}
-
-// expose functions used by inline HTML/onclicks
-window.removePoint = removePoint;
-window.addNewWaypoint = addNewWaypoint;
-window.addPointAsStart = addPointAsStart;
-window.addPointAsDestination = addPointAsDestination;
-window.addPointAsWaypoint = addPointAsWaypoint;
-// Expose export helpers for debugging / quick access
-window.exportGPX = exportGPX;
-window.importGPX = importGPX;
-
-
-document.addEventListener('DOMContentLoaded', async () => {
-    initializeSearchUI();
-    initMap();
-    
-    // Wire import/export buttons
-    const exportBtn = document.getElementById('exportGpxHeaderBtn');
-    const importBtn = document.getElementById('importGpxHeaderBtn');
-    
-    if (exportBtn) {
-        exportBtn.addEventListener('click', () => exportGPX());
-    }
-    
-    if (importBtn) {
-        importBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            importGPX();
-        });
-    }
-    
-    // Initialize elevation module if using TIFF-based elevation (now uses API internally)
-    if (CONFIG.ELEVATION_SOURCE === 'tiff') {
-        await initElevation([]);
-    }
-});

@@ -1,53 +1,76 @@
 <!-- index.html -->
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Route Planner</title>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23231a1a' width='100' height='100'/><path fill='%2332b8c6' d='M50 15c-19.3 0-35 15.7-35 35s35 45 35 45 35-25.7 35-45-15.7-35-35-35zm0 50c-8.3 0-15-6.7-15-15s6.7-15 15-15 15 6.7 15 15-6.7 15-15 15z'/></svg>">
+    <link rel="icon" type="image/svg+xml"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23231a1a' width='100' height='100'/><path fill='%2332b8c6' d='M50 15c-19.3 0-35 15.7-35 35s35 45 35 45 35-25.7 35-45-15.7-35-35-35zm0 50c-8.3 0-15-6.7-15-15s6.7-15 15-15 15 6.7 15 15-6.7 15-15 15z'/></svg>">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
     <link rel="stylesheet" href="css/styles.css">
 </head>
+
 <body>
     <div class="container">
         <div id="map"></div>
-        
+
         <div class="sidebar-card">
             <div class="card-header">
                 <h2>Route Planner</h2>
                 <div style="display:flex; gap:8px; align-items:center;">
                     <button id="importGpxHeaderBtn" class="btn-icon-toggle" title="Import GPX" aria-label="Import GPX">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke-linecap="round" stroke-linejoin="round"/>
-                            <polyline points="17 13 12 18 7 13" stroke-linecap="round" stroke-linejoin="round"/>
-                            <line x1="12" y1="18" x2="12" y2="5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 3v12" />
+                            <path d="M8 11l4 4 4-4" />
+                            <path d="M3 15v4c0 1.1.9 2 2 2h14a2 2 0 002-2v-4" />
                         </svg>
                     </button>
                     <button id="exportGpxHeaderBtn" class="btn-icon-toggle" title="Export GPX" aria-label="Export GPX">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke-linecap="round" stroke-linejoin="round"/>
-                            <polyline points="7 11 12 6 17 11" stroke-linecap="round" stroke-linejoin="round"/>
-                            <line x1="12" y1="6" x2="12" y2="19" stroke-linecap="round" stroke-linejoin="round"/>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 15V3" />
+                            <path d="M16 7l-4-4-4 4" />
+                            <path d="M3 15v4c0 1.1.9 2 2 2h14a2 2 0 002-2v-4" />
+                        </svg>
+                    </button>
+                    <button id="darkModeToggleBtn" class="btn-icon-toggle" title="Switch to Dark Mode"
+                        aria-label="Toggle Dark Mode">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
                         </svg>
                     </button>
                     <button id="debugToggleBtn" class="btn-icon-toggle" title="Toggle Debug Visualization">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="1"/>
-                            <path d="M12 2v4m0 12v4M4.22 4.22l2.83 2.83m5.9 5.9l2.83 2.83M2 12h4m12 0h4M4.22 19.78l2.83-2.83m5.9-5.9l2.83-2.83"/>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M8 2l1.88 1.88" />
+                            <path d="M14.12 3.88L16 2" />
+                            <path d="M9 7.13v-1a3.003 3.003 0 116 0v1" />
+                            <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 014-4h4a4 4 0 014 4v3c0 3.3-2.7 6-6 6" />
+                            <path d="M12 20v-9" />
+                            <path d="M6.53 9C4.6 8.8 3 7.1 3 5" />
+                            <path d="M6 13H2" />
+                            <path d="M3 21c0-2.1 1.7-3.9 3.8-4" />
+                            <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4" />
+                            <path d="M22 13h-4" />
+                            <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4" />
                         </svg>
                     </button>
                 </div>
             </div>
-            
+
             <div class="card-content">
                 <div id="initialSearch" class="form-group">
                     <label>Start Your Route</label>
                     <div class="search-input-wrapper">
-                        <input type="text" class="search-input" id="initialSearchInput" placeholder="Search first location...">
+                        <input type="text" class="search-input" id="initialSearchInput"
+                            placeholder="Search first location...">
                     </div>
                 </div>
-                
+
                 <div id="routeContent" style="display: none;">
                     <div class="form-group">
                         <label>Route Points</label>
@@ -57,12 +80,13 @@
                 </div>
             </div>
         </div>
-        
+
         <div id="elevationCard" class="elevation-card" style="display:none;">
             <div class="elevation-inner">
                 <div class="elevation-header">
                     <div class="elevation-stats">
-                        <div id="elev-distance" class="stat">Distance: <strong id="elev-distance-val">0 km</strong></div>
+                        <div id="elev-distance" class="stat">Distance: <strong id="elev-distance-val">0 km</strong>
+                        </div>
                         <div id="elev-duration" class="stat">Duration: <strong id="elev-duration-val">0m</strong></div>
                         <div id="elev-gain" class="stat">Gain: <strong id="elev-gain-val">0 m</strong></div>
                         <div id="elev-loss" class="stat">Loss: <strong id="elev-loss-val">0 m</strong></div>
@@ -77,7 +101,7 @@
 
         <div id="contextMenu" class="context-menu"></div>
         <div id="autocompletePortal"></div>
-        <div id="elevationTooltip" class="elevation-tooltip"></div> 
+        <div id="elevationTooltip" class="elevation-tooltip"></div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -85,4 +109,5 @@
     <!-- Load app as a module so code is organized into smaller files -->
     <script type="module" src="js/main.js"></script>
 </body>
+
 </html>
