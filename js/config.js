@@ -2,9 +2,9 @@
 const CONFIG = {
     MAPCENTER: [50.8, 10.0], // Initial map center; set to preferred region
     MAPZOOM: 7,
-    OSRMAPI: 'http://localhost:5000',
-    PHOTONAPI: 'http://localhost:2322',
-    ELEVATIONAPI: 'http://localhost:5002',
+    OSRMAPI: '/osrm',
+    PHOTONAPI: '/photon',
+    ELEVATIONAPI: '', // Empty because the code appends /api/v1/..., which matches our proxy root
     COUNTRYCODES: '', // Optional; the available area is determined by the OSRM backend PBF
 
     UPLOAD_TIMEOUT_MS: 60_000,

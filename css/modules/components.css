@@ -1,0 +1,302 @@
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.form-group label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+.search-input-wrapper {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.search-input {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    font-size: 14px;
+    background: var(--color-surface-light);
+    color: var(--color-text);
+    font-family: inherit;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.search-input:focus {
+    outline: none;
+    background: var(--color-surface);
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgba(50, 184, 198, 0.1);
+}
+
+.route-points-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.route-point-item {
+    display: flex;
+    gap: 10px;
+    padding: 12px;
+    background: var(--color-surface-light);
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    align-items: center;
+    cursor: grab;
+    transition: all 0.2s ease;
+    position: relative;
+    z-index: 1;
+}
+
+.route-point-item:hover {
+    background: rgba(50, 184, 198, 0.05);
+    border-color: var(--color-primary);
+}
+
+.btn {
+    padding: 10px 16px;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-family: inherit;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
+    color: #ffffff;
+    width: 100%;
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 16px rgba(50, 184, 198, 0.3);
+}
+
+.btn-outline {
+    background: transparent;
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    padding: 8px 12px;
+}
+
+.btn-danger {
+    background: transparent;
+    color: var(--color-error);
+    border: none;
+    font-size: 18px;
+    padding: 4px;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-danger:hover {
+    background: rgba(255, 107, 122, 0.1);
+}
+
+.btn-drag {
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    border-radius: 8px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-drag:hover {
+    background: var(--color-surface-light);
+    color: var(--color-text);
+    transform: scale(1.1);
+}
+
+.btn-drag:active {
+    cursor: grabbing;
+}
+
+/* Unified Action Buttons Group Initial Styles Removed */
+
+/* Unified Action Buttons */
+.btn-action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 12px;
+    height: 44px !important;
+    flex: 1;
+    min-width: 0;
+    border-radius: 10px !important;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--color-text-secondary);
+    backdrop-filter: blur(8px);
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.btn-action svg {
+    flex-shrink: 0;
+    opacity: 0.8;
+}
+
+.btn-action:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: var(--color-text);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+}
+
+.btn-action:active {
+    transform: translateY(0);
+}
+
+.btn-add-point:hover,
+.btn-save-route:hover {
+    background: rgba(50, 184, 198, 0.1);
+    border-color: rgba(50, 184, 198, 0.4);
+    color: var(--color-primary);
+}
+
+.btn-save-route svg {
+    transition: transform 0.3s ease;
+}
+
+.btn-save-route:hover svg {
+    transform: rotate(15deg) scale(1.1);
+}
+
+#saveRouteBtn.active {
+    background: rgba(50, 184, 198, 0.2) !important;
+    border-color: var(--color-primary) !important;
+    color: var(--color-primary) !important;
+}
+
+/* Animations */
+@keyframes fadeInScale {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Marker styles below */
+
+.point-type-badge {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+    flex-shrink: 0;
+    color: #fff;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.point-type-start {
+    background: linear-gradient(135deg, var(--color-start) 0%, var(--color-start-dark) 100%);
+    box-shadow: 0 4px 12px rgba(168, 230, 207, 0.3);
+}
+
+.point-type-dest {
+    background: linear-gradient(135deg, var(--color-dest) 0%, var(--color-dest-dark) 100%);
+    box-shadow: 0 4px 12px rgba(255, 211, 182, 0.3);
+}
+
+.point-type-waypoint {
+    background: linear-gradient(135deg, var(--color-waypoint) 0%, var(--color-waypoint-dark) 100%);
+    box-shadow: 0 4px 12px rgba(199, 210, 249, 0.3);
+}
+
+.route-point-item input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font-size: 13px;
+    background: transparent;
+    color: var(--color-text);
+    font-family: inherit;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#routeInfo {
+    padding: 12px;
+    background: rgba(50, 184, 198, 0.08);
+    border: 1px solid rgba(50, 184, 198, 0.2);
+    border-radius: 10px;
+    margin-top: 12px;
+}
+
+#routeInfo h3 {
+    margin: 0 0 10px 0;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--color-primary);
+    letter-spacing: 0.8px;
+}
+
+.stat-value {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--color-primary);
+}
+
+.btn-icon-toggle {
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+}
+
+.btn-icon-toggle.active {
+    background: rgba(50, 184, 198, 0.15);
+    color: var(--color-primary);
+    box-shadow: 0 0 8px rgba(50, 184, 198, 0.3);
+}

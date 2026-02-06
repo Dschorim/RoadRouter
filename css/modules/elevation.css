@@ -1,0 +1,83 @@
+/* Elevation Profile Card */
+.elevation-card {
+    position: fixed;
+    left: 24px;
+    right: 24px;
+    bottom: 24px;
+    height: auto;
+    min-height: 170px;
+    max-height: 200px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    padding: 12px 24px 16px;
+    z-index: 10050;
+    box-shadow: var(--shadow-md);
+    backdrop-filter: blur(8px);
+    box-sizing: border-box;
+    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.elevation-inner {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.elevation-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    color: var(--color-text-secondary);
+    font-size: 13px;
+}
+
+.elevation-stats {
+    display: flex;
+    gap: 18px;
+    align-items: center;
+}
+
+#elevationCanvas {
+    width: 100%;
+    height: 90px;
+    display: block;
+    background: transparent;
+    cursor: crosshair;
+}
+
+.elevation-tooltip {
+    display: none;
+    position: fixed !important;
+    pointer-events: none;
+    padding: 8px 12px;
+    background: rgba(26, 35, 50, 0.95) !important;
+    border: 1px solid var(--color-primary) !important;
+    /* Premium touch: themed border */
+    border-radius: 10px;
+    font-size: 13px;
+    white-space: nowrap;
+    z-index: 100000 !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+    color: white !important;
+    backdrop-filter: blur(8px);
+}
+
+.elevation-xaxis {
+    margin-top: 4px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+
+@media (max-width: 768px) {
+    .elevation-card {
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+        height: 140px;
+    }
+}

@@ -25,7 +25,9 @@ export const APP = {
     routeClickJustHappened: false,
     lastFocusedInputId: null,
     attachedAutocompleteInputs: new Set(),
-    elevationData: null
+    elevationData: null,
+    activeRouteId: null,
+    activeRouteName: null
 };
 
 export function resetAppState() {

@@ -1,0 +1,74 @@
+.sidebar-card {
+    width: 380px;
+    max-height: calc(100vh - 242px - 24px);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    box-shadow: var(--shadow-md);
+    display: flex;
+    flex-direction: column;
+    z-index: 999;
+    backdrop-filter: blur(8px);
+    position: fixed;
+    top: 24px;
+    left: 24px;
+    margin: 0;
+    transition: all 200ms ease;
+}
+
+.sidebar-card.drag-active {
+    border: 2px dashed var(--color-primary);
+    background: rgba(35, 26, 26, 0.95);
+}
+
+.sidebar-card.drag-active>*:not(#dropIndicator) {
+    filter: blur(3px);
+    pointer-events: none;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.card-header h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.card-content {
+    flex: 1;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow-y: auto;
+}
+
+.card-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.card-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.card-content::-webkit-scrollbar-thumb {
+    background: var(--color-surface-light);
+    border-radius: 3px;
+}
+
+@media (max-width: 768px) {
+    .sidebar-card {
+        width: calc(100vw - 48px);
+        max-height: 40vh;
+        top: 12px;
+        left: 12px;
+        right: 12px;
+    }
+}

@@ -1,0 +1,204 @@
+#map {
+    flex: 1;
+    z-index: 1;
+    background: #1a1f2e;
+}
+
+.map-pin {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 11px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    color: white;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    position: relative;
+    cursor: grab;
+    user-select: none;
+}
+
+.map-pin.start {
+    background: linear-gradient(135deg, var(--color-start) 0%, var(--color-start-dark) 100%);
+}
+
+.map-pin.dest {
+    background: linear-gradient(135deg, var(--color-dest) 0%, var(--color-dest-dark) 100%);
+}
+
+.map-pin.waypoint {
+    background: linear-gradient(135deg, var(--color-waypoint) 0%, var(--color-waypoint-dark) 100%);
+}
+
+.map-pin-preview {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transform: scale(0.92);
+    transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.map-pin-preview.visible {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.map-pin-preview-inner {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.leaflet-div-icon {
+    background: transparent;
+    border: none;
+}
+
+/* Custom Menu / Context Menu */
+.custom-menu-overlay,
+#contextMenu {
+    position: absolute;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-md);
+    z-index: 20000;
+    min-width: 200px;
+    backdrop-filter: blur(12px);
+    animation: menuFadeIn 0.15s cubic-bezier(0.2, 0, 0.2, 1);
+    transform: translate(-50%, -100%);
+    margin-top: -12px;
+}
+
+.custom-menu-overlay::after,
+#contextMenu::after {
+    content: '';
+    position: absolute;
+    bottom: -8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 8px solid var(--color-surface);
+    filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.1));
+}
+
+@keyframes menuFadeIn {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -100%) scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: translate(-50%, -100%) scale(1);
+    }
+}
+
+.menu-content {
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+}
+
+.menu-header {
+    padding: 8px 12px;
+}
+
+.menu-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text);
+    margin-bottom: 2px;
+}
+
+.menu-coords {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    font-family: monospace;
+}
+
+.menu-divider {
+    height: 1px;
+    background: var(--color-border);
+    margin: 4px 6px;
+}
+
+.menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: var(--color-text);
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.menu-item:hover {
+    background: var(--color-surface-light);
+}
+
+.menu-item.danger {
+    color: var(--color-error);
+}
+
+.menu-item.danger:hover {
+    background: rgba(255, 107, 122, 0.1);
+}
+
+/* Leaflet Controls */
+.leaflet-top {
+    top: 24px !important;
+}
+
+.leaflet-right {
+    right: 24px !important;
+}
+
+.leaflet-top.leaflet-right {
+    display: flex !important;
+    gap: 8px !important;
+}
+
+.leaflet-control-zoom {
+    margin-top: 0 !important;
+    border-radius: 8px;
+    background: var(--color-surface) !important;
+    border: 1px solid var(--color-border) !important;
+    overflow: hidden;
+}
+
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out {
+    background: var(--color-surface) !important;
+    color: var(--color-text) !important;
+    border: none !important;
+    width: 36px !important;
+    height: 36px !important;
+    line-height: 36px !important;
+    transition: all 0.2s ease;
+}
+
+.leaflet-control-zoom-in:hover,
+.leaflet-control-zoom-out:hover {
+    background: var(--color-surface-light) !important;
+    color: var(--color-primary) !important;
+}
