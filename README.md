@@ -35,6 +35,9 @@ A modern, interactive route planning application. The application uses OSRM (Ope
 - ✅ **Context menu** - Right-click on map (outside route) to set start, destination, or add waypoint
 - ✅ **Route info panel** - Displays total distance and duration
 - ✅ **Import/Export GPX** - Import and export routes as GPX files
+- ✅ **User authentication** - Sign up, login, and profile management with MFA support
+- ✅ **Route saving** - Save and manage routes in your profile
+- ✅ **Admin panel** - User management for administrators
 
 ### Elevation Profile
 - ✅ **Elevation chart** - Interactive elevation profile graph for your route
@@ -170,6 +173,69 @@ Edit `js/config.js` to customize:
 ### Elevation
 - **Single**: `GET /api/v1/elevation?lat={lat}&lng={lng}`
 - **Batch**: `POST /api/v1/elevation/batch` with `{points: [{lat, lng}, ...]}`
+
+## Admin Tasks
+
+### User Management
+
+Admins have access to a User Management tab in their settings where they can:
+- **View all users** - See username and role for each user
+- **Reset passwords** - Set a new password for any user
+- **Reset MFA** - Clear MFA settings for users locked out
+- **Promote to admin** - Grant admin privileges to regular users
+- **Demote to user** - Remove admin privileges (only if 2+ admins exist)
+- **Delete users** - Remove user accounts (cannot be undone)
+
+### Reset Admin Password (Docker Console)
+
+If you've forgotten the admin password, you can reset it directly from the database using the Docker console:
+
+```bash
+# Connect to the PostgreSQL database container
+docker exec -it route-planner-db psql -U user -d route_planner
+
+# First, check what admin users exist
+SELECT username, role FROM users WHERE role = 'ADMIN';
+
+# Reset admin password (password will be 'admin123')
+# Replace 'admin' with your actual admin username from the query above
+UPDATE users SET password_hash = '$argon2id$v=19$m=19456,t=2,p=1$MWZiNjZhMjA0ZDk5ZDA3M2UyMzE1ZmQ3NWUzYjk1NjU$eJohitBY8btBy3M7woxeRtQdoE0Q11g4x9UX9hZOp0o', mfa_secret = NULL, mfa_pending_secret = NULL WHERE username = 'admin';
+
+# Verify the update
+SELECT username, role, mfa_secret FROM users WHERE role = 'ADMIN';
+
+# Exit psql
+\q
+```
+
+After running this command:
+- Admin can log in with their username and password `admin123`
+- MFA is disabled (can be re-enabled in settings)
+- Change the password immediately after logging in
+
+### Reset User Password (Browser Console)
+
+If a user forgets their password or is locked out due to MFA issues, an admin can reset it using the browser console:
+
+```javascript
+// Open browser console (F12) while logged in as admin
+fetch('/api/admin/reset-password', {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${JSON.parse(localStorage.getItem('route_planner_auth')).token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    username: 'username_to_reset',
+    new_password: 'new_temporary_password'
+  })
+}).then(r => r.text()).then(console.log);
+```
+
+This will:
+- Reset the user's password to the specified value
+- Clear any MFA settings (user will need to set up MFA again)
+- Allow the user to log in with the new password
 
 ## Browser Compatibility
 

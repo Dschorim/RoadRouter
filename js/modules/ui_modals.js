@@ -30,6 +30,12 @@ export const UI_MODAL = {
         this.body.textContent = message;
         this.confirmBtn.textContent = confirmText;
         this.cancelBtn.textContent = cancelText;
+        
+        if (cancelText) {
+            this.cancelBtn.style.display = 'block';
+        } else {
+            this.cancelBtn.style.display = 'none';
+        }
 
         if (useInput) {
             this.input.style.display = 'block';
@@ -69,10 +75,10 @@ export const UI_MODAL = {
     },
 
     async prompt(title, message, placeholder = '', defaultValue = '') {
-        return await this.show({ title, message, useInput: true, placeholder, defaultValue });
+        return await this.show({ title, message, useInput: true, placeholder, defaultValue, cancelText: '' });
     },
 
     async alert(title, message) {
-        return await this.show({ title, message, cancelText: 'Close', confirmText: 'OK' });
+        return await this.show({ title, message, cancelText: '', confirmText: 'OK' });
     }
 };

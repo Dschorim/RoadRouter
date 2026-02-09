@@ -86,10 +86,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const profileBtn = document.getElementById('profileBtn');
     if (profileBtn) {
         profileBtn.addEventListener('click', () => {
+            if (!AUTH.isAuthenticated()) {
+                authModal?.classList.add('active');
+                return;
+            }
             const modal = document.getElementById('userProfileModal');
             if (modal) {
                 modal.classList.add('active');
-                renderSavedRoutes(); // Ensure highlighting is fresh
+                renderSavedRoutes();
             }
         });
     }
@@ -569,11 +573,24 @@ function setupAuthUI() {
 
     // Toggle Profile / Login
     profileBtn?.addEventListener('click', () => {
-        if (AUTH.isAuthenticated()) {
-            userProfileModal?.classList.add('active');
-        } else {
+        if (!AUTH.isAuthenticated()) {
             authModal?.classList.add('active');
+            return;
         }
+        userProfileModal?.classList.add('active');
+        
+        // Only reset to account tab on first login
+        if (!APP.lastActiveTab) {
+            const tabBtns = document.querySelectorAll('.tab-btn');
+            tabBtns.forEach(b => b.classList.remove('active'));
+            document.querySelector('.tab-btn[data-tab="account"]')?.classList.add('active');
+            
+            const panes = document.querySelectorAll('.tab-pane');
+            panes.forEach(p => p.classList.remove('active'));
+            document.getElementById('tab-account')?.classList.add('active');
+        }
+        
+        renderSavedRoutes();
     });
 
     closeProfileBtn?.addEventListener('click', () => userProfileModal?.classList.remove('active'));
@@ -601,6 +618,11 @@ function setupAuthUI() {
         const username = document.getElementById('authUsername').value;
         const password = document.getElementById('authPassword').value;
         const errorEl = document.getElementById('authError');
+        const mfaGroup = document.getElementById('mfaGroup');
+        const mfaCode = document.getElementById('authMfaCode')?.value;
+        const usernameGroup = document.getElementById('authUsername').parentElement;
+        const passwordGroup = document.getElementById('authPassword').parentElement;
+
         if (errorEl) errorEl.style.display = 'none';
 
         try {
@@ -610,18 +632,109 @@ function setupAuthUI() {
                     throw new Error('Passwords do not match');
                 }
                 await AUTH.signup(username, password, confirmPassword);
+                APP.lastActiveTab = null;
             } else {
-                await AUTH.login(username, password);
+                const res = await AUTH.login(username, password, mfaCode || null);
+                if (res.mfa_required) {
+                    if (mfaGroup) mfaGroup.style.display = 'block';
+                    if (usernameGroup) usernameGroup.style.display = 'none';
+                    if (passwordGroup) passwordGroup.style.display = 'none';
+                    const mfaInput = document.getElementById('authMfaCode');
+                    if (mfaInput) {
+                        mfaInput.required = true;
+                        mfaInput.focus();
+                    }
+                    if (errorEl) {
+                        errorEl.textContent = 'Enter your MFA code';
+                        errorEl.style.color = 'var(--color-primary)';
+                        errorEl.style.display = 'block';
+                    }
+                    return;
+                }
+                APP.lastActiveTab = null;
             }
             authModal?.classList.remove('active');
             authForm?.reset();
+            if (mfaGroup) mfaGroup.style.display = 'none';
+            if (usernameGroup) usernameGroup.style.display = 'block';
+            if (passwordGroup) passwordGroup.style.display = 'block';
+            const mfaInput = document.getElementById('authMfaCode');
+            if (mfaInput) mfaInput.required = false;
         } catch (err) {
             if (errorEl) {
                 errorEl.textContent = err.message;
+                errorEl.style.color = 'var(--color-error)';
                 errorEl.style.display = 'block';
             }
         }
     });
+
+    // Security Tab Listeners
+    const changePassBtn = document.getElementById('changePassBtn');
+    if (changePassBtn) {
+        changePassBtn.addEventListener('click', async () => {
+            const oldPass = document.getElementById('oldPassword').value;
+            const newPass = document.getElementById('newPassword').value;
+            const confirmPass = document.getElementById('confirmNewPassword').value;
+
+            if (!oldPass || !newPass || !confirmPass) {
+                UI_MODAL.alert("Error", "Please fill in all password fields.");
+                return;
+            }
+
+            if (newPass !== confirmPass) {
+                UI_MODAL.alert("Error", "New passwords do not match.");
+                return;
+            }
+
+            try {
+                await AUTH.changePassword(oldPass, newPass, confirmPass);
+                UI_MODAL.alert("Success", "Password changed successfully!");
+                document.getElementById('oldPassword').value = '';
+                document.getElementById('newPassword').value = '';
+                document.getElementById('confirmNewPassword').value = '';
+            } catch (err) {
+                UI_MODAL.alert("Error", err.message);
+            }
+        });
+    }
+
+    const setupMfaBtn = document.getElementById('setupMfaBtn');
+    if (setupMfaBtn) {
+        setupMfaBtn.addEventListener('click', async () => {
+            try {
+                const res = await AUTH.setupMFA();
+                const qrContainer = document.getElementById('mfaQrCode');
+                if (qrContainer) {
+                    qrContainer.innerHTML = `<img src="${res.qr_code_url}" alt="MFA QR Code" style="width:100%; border-radius: 8px;">`;
+                }
+                const setupContent = document.getElementById('mfaSetupContent');
+                if (setupContent) setupContent.style.display = 'block';
+                setupMfaBtn.style.display = 'none';
+            } catch (err) {
+                UI_MODAL.alert("Error", "Failed to setup MFA: " + err.message);
+            }
+        });
+    }
+
+    const verifyMfaBtn = document.getElementById('verifyMfaBtn');
+    if (verifyMfaBtn) {
+        verifyMfaBtn.addEventListener('click', async () => {
+            const code = document.getElementById('mfaCodeVerify').value;
+            if (!code) return;
+            try {
+                await AUTH.verifyMFA(code);
+                const mfaStatus = document.getElementById('mfaStatus');
+                if (mfaStatus) {
+                    mfaStatus.innerHTML = '<div class="mfa-enabled-info" style="color: var(--color-primary); font-weight: 600; text-align: center; padding: 20px;">MFA is active on your account.</div>';
+                }
+                const setupContent = document.getElementById('mfaSetupContent');
+                if (setupContent) setupContent.style.display = 'none';
+            } catch (err) {
+                UI_MODAL.alert("Error", err.message);
+            }
+        });
+    }
 
     logoutBtn?.addEventListener('click', () => {
         AUTH.logout();
@@ -675,14 +788,12 @@ function setupAuthUI() {
         const name = await UI_MODAL.prompt("Save Route", "Enter a name for this route:", "My Awesome Route");
         if (!name) return;
 
-        // Validation: letters, numbers, spaces only
-        if (!/^[a-zA-Z0-9 ]+$/.test(name)) {
-            await UI_MODAL.alert("Invalid Name", "Route name can only contain letters, numbers, and spaces.");
-            return;
-        }
+        // Silent sanitization: letters, numbers, spaces only
+        const sanitizedName = name.replace(/[^a-zA-Z0-9 ]/g, '').trim();
+        if (!sanitizedName) return; // ignore completely empty after sanitization
 
         try {
-            const res = await AUTH.saveRoute(name, {
+            const res = await AUTH.saveRoute(sanitizedName, {
                 points: APP.routePoints,
                 route: APP.currentRoute,
                 metadata
@@ -697,6 +808,8 @@ function setupAuthUI() {
         }
     });
 
+
+
     // Close modals on click outside
     document.addEventListener('click', (e) => {
         if (authModal && e.target === authModal) {
@@ -708,6 +821,83 @@ function setupAuthUI() {
     });
 
     AUTH.subscribe(updateUIForAuth);
+
+    // Profile Tab Switching
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tabId = btn.getAttribute('data-tab');
+            
+            APP.lastActiveTab = tabId;
+
+            // Update buttons
+            tabBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            // Update panes
+            const panes = document.querySelectorAll('.tab-pane');
+            panes.forEach(p => p.classList.remove('active'));
+            document.getElementById(`tab-${tabId}`).classList.add('active');
+
+            // Refresh routes when switching to routes tab
+            if (tabId === 'routes') {
+                renderSavedRoutes();
+            }
+            
+            // Load users when switching to admin tab
+            if (tabId === 'admin') {
+                loadAdminUsers();
+            }
+            
+            // Update MFA status when switching to security tab
+            if (tabId === 'security') {
+                updateMfaStatus();
+            }
+        });
+    });
+
+    // Avatar Edit Listener
+    const editAvatarBtn = document.getElementById('editAvatarBtn');
+    const avatarInput = document.getElementById('avatarInput');
+
+    if (editAvatarBtn && avatarInput) {
+        editAvatarBtn.addEventListener('click', () => {
+            avatarInput.click();
+        });
+
+        avatarInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            if (file.size > 1024 * 1024) {
+                UI_MODAL.alert("Error", "Image is too large. Please select a file smaller than 1MB.");
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+                const img = new Image();
+                img.onload = async () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 256;
+                    canvas.height = 256;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, 256, 256);
+                    const base64Data = canvas.toDataURL('image/jpeg', 0.8);
+                    
+                    try {
+                        await AUTH.updateProfile({ avatar_data: base64Data });
+                        updateUIForAuth(AUTH.user);
+                    } catch (err) {
+                        UI_MODAL.alert("Error", "Failed to upload avatar: " + err.message);
+                    }
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+
     // Initial UI state
     updateUIForAuth(AUTH.user);
 }
@@ -716,8 +906,12 @@ function updateUIForAuth(user) {
     const saveRouteBtn = document.getElementById('saveRouteBtn');
     const savedRoutesSection = document.getElementById('savedRoutesSection');
     const headerUsername = document.getElementById('headerUsername');
+    const profileUsername = document.getElementById('profileUsername');
     const headerRole = document.getElementById('headerRole');
+    const profileRole = document.getElementById('profileRole');
     const headerAvatar = document.getElementById('headerAvatar');
+    const headerAvatarLarge = document.getElementById('headerAvatarLarge');
+    const adminTabBtn = document.getElementById('adminTabBtn');
 
     if (user) {
         if (saveRouteBtn) {
@@ -730,16 +924,50 @@ function updateUIForAuth(user) {
             document.getElementById('newRouteBtn').style.display = hasPoints ? 'flex' : 'none';
         }
         if (savedRoutesSection) savedRoutesSection.style.display = 'block';
-        if (headerUsername) headerUsername.textContent = user.username;
-        if (headerRole) headerRole.textContent = user.role;
-        if (headerAvatar) headerAvatar.textContent = user.username.charAt(0).toUpperCase();
+
+        const usernameDisplay = user.username;
+        const roleDisplay = user.role || 'User';
+        const avatarChar = usernameDisplay.charAt(0).toUpperCase();
+
+        if (headerUsername) headerUsername.textContent = usernameDisplay;
+        if (profileUsername) profileUsername.textContent = usernameDisplay;
+        if (headerRole) headerRole.textContent = roleDisplay;
+        if (profileRole) profileRole.textContent = roleDisplay;
+        
+        // Show admin tab if user is admin
+        if (adminTabBtn) {
+            adminTabBtn.style.display = user.role === 'ADMIN' ? 'flex' : 'none';
+        }
+        
+        if (user.avatar_data) {
+            if (headerAvatar) {
+                headerAvatar.innerHTML = `<img src="${user.avatar_data}" style="display:block; width:100%; height:100%; object-fit:cover; border-radius:50%;">`;
+            }
+            if (headerAvatarLarge) {
+                headerAvatarLarge.innerHTML = `<img src="${user.avatar_data}" style="display:block; width:100%; height:100%; object-fit:cover; border-radius:50%;">`;
+            }
+        } else {
+            if (headerAvatar) {
+                headerAvatar.innerHTML = '';
+                headerAvatar.textContent = avatarChar;
+            }
+            if (headerAvatarLarge) {
+                headerAvatarLarge.innerHTML = '';
+                headerAvatarLarge.textContent = avatarChar;
+            }
+        }
+
         renderSavedRoutes();
     } else {
         if (saveRouteBtn) saveRouteBtn.style.display = 'none';
         if (savedRoutesSection) savedRoutesSection.style.display = 'none';
         if (headerUsername) headerUsername.textContent = 'Guest';
+        if (profileUsername) profileUsername.textContent = 'Guest';
         if (headerRole) headerRole.textContent = 'Anonymous';
+        if (profileRole) profileRole.textContent = 'Anonymous';
         if (headerAvatar) headerAvatar.textContent = '?';
+        if (headerAvatarLarge) headerAvatarLarge.textContent = '?';
+        if (adminTabBtn) adminTabBtn.style.display = 'none';
     }
 }
 
@@ -917,3 +1145,176 @@ function updateSaveButton() {
         saveRouteBtn.style.display = APP.currentRoute ? 'flex' : 'none';
     }
 }
+
+async function loadAdminUsers() {
+    const list = document.getElementById('adminUsersList');
+    if (!list || !AUTH.isAuthenticated() || AUTH.user?.role !== 'ADMIN') return;
+
+    try {
+        const users = await AUTH.adminListUsers();
+        
+        if (users.length === 0) {
+            list.innerHTML = '<div class="empty-state">No users found</div>';
+            return;
+        }
+
+        const adminCount = users.filter(u => u.role === 'ADMIN').length;
+
+        list.innerHTML = users.map(u => `
+            <div class="admin-user-item">
+                <div class="admin-user-info">
+                    <div class="admin-user-name">${u.username}</div>
+                    <div class="admin-user-role">${u.role}</div>
+                </div>
+                <div class="admin-user-actions">
+                    <button class="btn-admin-action" onclick="resetUserPassword('${u.username}')" title="Reset Password">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        </svg>
+                    </button>
+                    <button class="btn-admin-action" onclick="resetUserMfa('${u.username}')" id="mfa-btn-${u.username}" title="Reset MFA">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                        </svg>
+                    </button>
+                    ${u.role !== 'ADMIN' ? `<button class="btn-admin-action" onclick="promoteUser('${u.username}')" title="Make Admin">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                        </svg>
+                    </button>` : (adminCount > 1 ? `<button class="btn-admin-action" onclick="demoteUser('${u.username}')" title="Demote to User">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="8" y1="12" x2="16" y2="12"></line>
+                        </svg>
+                    </button>` : '')}
+                    <button class="btn-admin-action delete" onclick="deleteUser('${u.username}')" title="Delete User">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        `).join('');
+        
+        // Check MFA status for each user
+        users.forEach(async u => {
+            const hasMfa = await checkUserMfaStatus(u.username);
+            const btn = document.getElementById(`mfa-btn-${u.username}`);
+            if (btn && !hasMfa) {
+                btn.disabled = true;
+                btn.style.opacity = '0.5';
+                btn.style.cursor = 'not-allowed';
+            }
+        });
+    } catch (err) {
+        list.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+    }
+}
+
+async function checkUserMfaStatus(username) {
+    try {
+        const users = await AUTH.adminListUsers();
+        const user = users.find(u => u.username === username);
+        return user?.mfa_enabled || false;
+    } catch {
+        return false;
+    }
+}
+
+function updateMfaStatus() {
+    const mfaStatus = document.getElementById('mfaStatus');
+    if (!mfaStatus || !AUTH.isAuthenticated()) return;
+    
+    // Check if user has MFA enabled by checking if they can setup (no active MFA)
+    AUTH.adminListUsers().then(users => {
+        const currentUser = users.find(u => u.username === AUTH.user.username);
+        if (currentUser?.mfa_enabled) {
+            mfaStatus.innerHTML = '<div class="mfa-enabled-info" style="color: var(--color-primary); font-weight: 600; text-align: center; padding: 20px;">MFA is active on your account.</div>';
+        } else {
+            mfaStatus.innerHTML = '<button id="setupMfaBtn" class="btn btn-outline" style="width:100%;">Set Up Authenticator</button>';
+            const setupMfaBtn = document.getElementById('setupMfaBtn');
+            if (setupMfaBtn) {
+                setupMfaBtn.addEventListener('click', async () => {
+                    try {
+                        const res = await AUTH.setupMFA();
+                        const qrContainer = document.getElementById('mfaQrCode');
+                        if (qrContainer) {
+                            qrContainer.innerHTML = `<img src="${res.qr_code_url}" alt="MFA QR Code" style="width:100%; border-radius: 8px;">`;
+                        }
+                        const setupContent = document.getElementById('mfaSetupContent');
+                        if (setupContent) setupContent.style.display = 'block';
+                        setupMfaBtn.style.display = 'none';
+                    } catch (err) {
+                        UI_MODAL.alert("Error", "Failed to setup MFA: " + err.message);
+                    }
+                });
+            }
+        }
+    }).catch(() => {});
+}
+
+window.resetUserPassword = async function(username) {
+    const newPassword = await UI_MODAL.prompt('Reset Password', `Enter new password for ${username}:`, 'New password');
+    if (!newPassword) return;
+
+    try {
+        await AUTH.adminResetPassword(username, newPassword);
+        await UI_MODAL.alert('Success', `Password reset for ${username}`);
+    } catch (err) {
+        await UI_MODAL.alert('Error', err.message);
+    }
+};
+
+window.resetUserMfa = async function(username) {
+    const confirmed = await UI_MODAL.confirm('Reset MFA', `Reset MFA for ${username}?`, 'Reset', 'Cancel');
+    if (!confirmed) return;
+
+    try {
+        await AUTH.adminResetMfa(username);
+        await UI_MODAL.alert('Success', `MFA reset for ${username}`);
+        loadAdminUsers();
+    } catch (err) {
+        await UI_MODAL.alert('Error', err.message);
+    }
+};
+
+window.deleteUser = async function(username) {
+    const confirmed = await UI_MODAL.confirm('Delete User', `Are you sure you want to delete ${username}? This cannot be undone.`, 'Delete', 'Cancel');
+    if (!confirmed) return;
+
+    try {
+        await AUTH.adminDeleteUser(username);
+        await UI_MODAL.alert('Success', `User ${username} deleted`);
+        loadAdminUsers();
+    } catch (err) {
+        await UI_MODAL.alert('Error', err.message);
+    }
+};
+
+window.promoteUser = async function(username) {
+    const confirmed = await UI_MODAL.confirm('Make Admin', `Promote ${username} to admin?`, 'Promote', 'Cancel');
+    if (!confirmed) return;
+
+    try {
+        await AUTH.adminPromoteUser(username);
+        await UI_MODAL.alert('Success', `${username} is now an admin`);
+        loadAdminUsers();
+    } catch (err) {
+        await UI_MODAL.alert('Error', err.message);
+    }
+};
+
+window.demoteUser = async function(username) {
+    const confirmed = await UI_MODAL.confirm('Demote to User', `Demote ${username} to regular user?`, 'Demote', 'Cancel');
+    if (!confirmed) return;
+
+    try {
+        await AUTH.adminDemoteUser(username);
+        await UI_MODAL.alert('Success', `${username} is now a regular user`);
+        loadAdminUsers();
+    } catch (err) {
+        await UI_MODAL.alert('Error', err.message);
+    }
+};
