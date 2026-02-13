@@ -18,6 +18,62 @@
     transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+.elevation-card.collapsed {
+    min-height: 60px;
+    max-height: 60px;
+}
+
+.elevation-card.collapsed .elevation-inner > *:not(.elevation-header) {
+    display: none;
+}
+
+.btn-elevation-collapse {
+    display: none;
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.btn-elevation-collapse:hover {
+    background: var(--color-surface-light);
+    color: var(--color-text);
+}
+
+@media (max-width: 768px) {
+    .elevation-card {
+        left: 0;
+        right: 0;
+        bottom: 0;
+        min-height: 140px;
+        max-height: 300px;
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+        border-bottom: none;
+        padding: 12px 16px 16px;
+    }
+
+    .elevation-card.collapsed {
+        min-height: 60px;
+        max-height: 60px;
+    }
+
+    .btn-elevation-collapse {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .elevation-stats {
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+}
+
 .elevation-inner {
     width: 100%;
     display: flex;
@@ -38,6 +94,16 @@
     display: flex;
     gap: 18px;
     align-items: center;
+}
+
+.elevation-stats .stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.elevation-stats .stat svg {
+    flex-shrink: 0;
 }
 
 #elevationCanvas {
@@ -73,13 +139,4 @@
     justify-content: space-between;
     font-size: 12px;
     color: var(--color-text-secondary);
-}
-
-@media (max-width: 768px) {
-    .elevation-card {
-        left: 12px;
-        right: 12px;
-        bottom: 12px;
-        height: 140px;
-    }
 }

@@ -395,8 +395,6 @@ export function renderElevationProfile(data) {
         const point = data[idx];
         if (!point) return;
 
-        console.log(`[Tooltip] Move #${moveCount}: idx=${idx}, lastIdx=${lastIdx}, clientX=${evt.clientX}, clientY=${evt.clientY}`);
-
         // Cancel any pending animation frame
         if (rafId) cancelAnimationFrame(rafId);
 
@@ -418,7 +416,6 @@ export function renderElevationProfile(data) {
                     top = evt.clientY + 10;
                 }
 
-                console.log(`[Tooltip] RAF update: left=${left}, top=${top}, width=${tooltipWidth}, height=${tooltipHeight}`);
                 tooltip.style.left = left + 'px';
                 tooltip.style.top = top + 'px';
             }
@@ -427,8 +424,6 @@ export function renderElevationProfile(data) {
         // Only update content and redraw when index changes
         if (idx === lastIdx) return;
         lastIdx = idx;
-
-        console.log(`[Tooltip] Index changed to ${idx}, updating content`);
 
         // Calculate gradient at this point
         let gradient = 0;
@@ -472,6 +467,25 @@ export function renderElevationProfile(data) {
 
         renderElevationProfile(data);
     };
+
+    canvas.onclick = function (evt) {
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = (evt.clientX - rect.left);
+        const rel = Math.max(0, Math.min(1, (mouseX - pad) / (width - pad * 2)));
+        const idx = Math.round(rel * (data.length - 1));
+        const point = data[idx];
+        if (point && APP.map) {
+            APP.map.setView([point.lat, point.lng], APP.map.getZoom());
+        }
+    };
+
+    // Hide tooltip on touch/click outside elevation canvas
+    document.addEventListener('click', function hideTooltipOnClick(e) {
+        if (!canvas.contains(e.target)) {
+            const tooltip = document.getElementById('elevationTooltip');
+            if (tooltip) tooltip.style.display = 'none';
+        }
+    });
 }
 
 // Helper to draw just the cursor line without full redraw

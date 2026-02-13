@@ -21,6 +21,14 @@
     user-select: none;
 }
 
+@media (max-width: 768px) {
+    .map-pin {
+        width: 36px;
+        height: 36px;
+        font-size: 16px;
+    }
+}
+
 .map-pin.start {
     background: linear-gradient(135deg, var(--color-start) 0%, var(--color-start-dark) 100%);
 }
@@ -197,6 +205,12 @@
 .debug-legend-card {
     margin-right: 0 !important;
     margin-top: 0 !important;
+}
+
+@media (max-width: 768px) {
+    .debug-legend-card {
+        display: none !important;
+    }
 }
 
 .leaflet-control-zoom-in,

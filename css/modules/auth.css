@@ -347,6 +347,25 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    position: relative;
+    overflow: hidden;
+}
+
+.saved-route-item::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(to bottom, transparent 0%, transparent calc(100% - 12px), rgba(50, 184, 198, 0.15) calc(100% - 13px), rgba(50, 184, 198, 0.15) 100%);
+    opacity: 1;
+    z-index: 0;
+    transition: opacity 0.3s ease;
+}
+
+.saved-route-item:hover::before {
+    opacity: 1;
 }
 
 .saved-route-item.active {
@@ -357,6 +376,8 @@
 
 .saved-route-info {
     flex: 1;
+    position: relative;
+    z-index: 1;
 }
 
 .saved-route-actions {
@@ -364,6 +385,8 @@
     gap: 8px;
     opacity: 0;
     transition: opacity 0.2s ease;
+    position: relative;
+    z-index: 1;
 }
 
 .saved-route-item:hover .saved-route-actions,
@@ -453,18 +476,19 @@
 .meta-tag {
     font-size: 11px;
     padding: 2px 8px;
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.4);
     border: 1px solid var(--color-border);
     border-radius: 4px;
-    color: var(--color-text-secondary);
+    color: var(--color-text);
     display: flex;
     align-items: center;
+    font-weight: 600;
 }
 
 .meta-tag.elevation {
-    background: rgba(50, 184, 198, 0.05);
+    background: rgba(50, 184, 198, 0.4);
     border-color: rgba(50, 184, 198, 0.2);
-    color: var(--color-primary);
+    color: #fff;
 }
 
 .saved-route-date {
@@ -598,4 +622,69 @@
 .btn-admin-action.delete:hover {
     color: var(--color-error);
     border-color: var(--color-error);
+}
+
+@media (max-width: 768px) {
+    .modal-content {
+        width: 95%;
+        max-width: none;
+        padding: 24px;
+    }
+
+    .modal-content.profile-revamp {
+        width: 100%;
+        height: 100vh;
+        max-height: none;
+        border-radius: 0;
+    }
+
+    .profile-layout {
+        flex-direction: column;
+    }
+
+    .profile-sidebar {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        padding: 12px 0;
+    }
+
+    .profile-tabs {
+        flex-direction: row;
+        overflow-x: auto;
+        padding: 0 12px;
+        justify-content: center;
+    }
+
+    .tab-btn {
+        flex-shrink: 0;
+        white-space: nowrap;
+    }
+
+    .tab-btn span {
+        display: none;
+    }
+
+    .sidebar-footer {
+        display: none;
+    }
+
+    .profile-content {
+        padding: 20px;
+    }
+
+    .saved-route-actions,
+    .admin-user-actions {
+        opacity: 1;
+    }
+
+    .saved-route-actions svg,
+    .admin-user-actions svg {
+        width: 21px;
+        height: 21px;
+    }
+
+    .saved-route-meta {
+        flex-wrap: wrap;
+    }
 }

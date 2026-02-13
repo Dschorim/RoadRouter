@@ -224,6 +224,12 @@ export function renderRoutePoints() {
 
         div.addEventListener('dragover', (e) => {
             e.preventDefault();
+            
+            // Only show drop indicator for waypoint reordering, not for file drops
+            if (e.dataTransfer.types.includes('Files')) {
+                return;
+            }
+            
             e.dataTransfer.dropEffect = 'move';
             document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
 

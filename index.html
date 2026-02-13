@@ -4,7 +4,9 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
     <title>Route Planner</title>
     <link rel="icon" type="image/svg+xml"
         href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23231a1a' width='100' height='100'/><path fill='%2332b8c6' d='M50 15c-19.3 0-35 15.7-35 35s35 45 35 45 35-25.7 35-45-15.7-35-35-35zm0 50c-8.3 0-15-6.7-15-15s6.7-15 15-15 15 6.7 15 15-6.7 15-15 15z'/></svg>">
@@ -25,7 +27,12 @@
 
         <div class="sidebar-card">
             <div class="card-header">
-                <h2>Route Planner</h2>
+                <button id="collapseSidebarBtn" class="btn-icon-toggle btn-collapse" title="Collapse" aria-label="Collapse Sidebar">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="18 15 12 9 6 15"></polyline>
+                    </svg>
+                </button>
                 <div style="display:flex; gap:8px; align-items:center;">
                     <button id="importGpxHeaderBtn" class="btn-icon-toggle" title="Import GPX" aria-label="Import GPX">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -131,12 +138,39 @@
             <div class="elevation-inner">
                 <div class="elevation-header">
                     <div class="elevation-stats">
-                        <div id="elev-distance" class="stat">Distance: <strong id="elev-distance-val">0 km</strong>
+                        <div id="elev-distance" class="stat" title="Distance">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="5" y1="12" x2="19" y2="12"></line>
+                                <polyline points="12 5 19 12 12 19"></polyline>
+                            </svg>
+                            <strong id="elev-distance-val">0 km</strong>
                         </div>
-                        <div id="elev-duration" class="stat">Duration: <strong id="elev-duration-val">0m</strong></div>
-                        <div id="elev-gain" class="stat">Gain: <strong id="elev-gain-val">0 m</strong></div>
-                        <div id="elev-loss" class="stat">Loss: <strong id="elev-loss-val">0 m</strong></div>
+                        <div id="elev-duration" class="stat" title="Duration">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 16 14"></polyline>
+                            </svg>
+                            <strong id="elev-duration-val">0m</strong>
+                        </div>
+                        <div id="elev-gain" class="stat" title="Elevation Gain">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="18 15 12 9 6 15"></polyline>
+                            </svg>
+                            <strong id="elev-gain-val">0 m</strong>
+                        </div>
+                        <div id="elev-loss" class="stat" title="Elevation Loss">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                            <strong id="elev-loss-val">0 m</strong>
+                        </div>
                     </div>
+                    <button id="collapseElevationBtn" class="btn-icon-toggle btn-elevation-collapse" title="Collapse" aria-label="Collapse Elevation">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </button>
                 </div>
                 <div style="position:relative;">
                     <canvas id="elevationCanvas" width="1600" height="120"></canvas>
@@ -220,7 +254,8 @@
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
                                     <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
-                                    <line x1="12" y1="18" x2="12.01" y2="18"></line>
+                                    <line x1="5" y1="18" x2="19" y2="18"></line>
+                                    <line x1="12" y1="18" x2="12" y2="22"></line>
                                 </svg>
                                 <span>Devices</span>
                             </button>

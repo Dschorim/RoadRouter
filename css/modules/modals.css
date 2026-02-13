@@ -90,4 +90,20 @@
     color: var(--color-text);
 }
 
+@media (max-width: 768px) {
+    .action-modal-content {
+        width: 95%;
+        padding: 20px;
+    }
+
+    .action-modal-footer {
+        flex-direction: column;
+    }
+
+    .btn-modal {
+        width: 100%;
+        min-width: unset;
+    }
+}
+
 /* .btn-modal-confirm removed to fix empty ruleset lint */

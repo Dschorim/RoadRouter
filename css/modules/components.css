@@ -201,6 +201,41 @@
     color: var(--color-primary) !important;
 }
 
+@media (max-width: 768px) {
+    .route-point-item {
+        padding: 16px 12px;
+        gap: 8px;
+    }
+
+    .point-type-badge {
+        width: 32px;
+        height: 32px;
+        font-size: 14px;
+    }
+
+    .route-point-item svg {
+        width: 21px;
+        height: 21px;
+    }
+
+    .btn-danger,
+    .btn-drag {
+        width: 32px;
+        height: 32px;
+        min-width: 32px;
+    }
+
+    .btn-action {
+        height: 48px !important;
+        font-size: 14px;
+    }
+
+    .btn-icon-toggle {
+        width: 36px;
+        height: 36px;
+    }
+}
+
 /* Animations */
 @keyframes fadeInScale {
     from {

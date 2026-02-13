@@ -8,7 +8,8 @@ import { attachAutocompleteToInput } from './modules/autocomplete.js';
 import { reverseGeocode } from './geocoding.js';
 import { formatDistance, formatDuration } from './utils.js';
 import { initialize as initElevation, getElevations } from './elevation.js';
-import { fetchAndRenderElevation } from './modules/elevation_renderer.js';
+import { fetchAndRenderElevation, renderElevationProfile } from './modules/elevation_renderer.js';
+import { generateElevationThumbnail } from './modules/elevation_thumbnail.js';
 import { AUTH } from './modules/auth.js';
 import { UI_MODAL } from './modules/ui_modals.js';
 
@@ -99,10 +100,51 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const exportBtn = document.getElementById('exportGpxHeaderBtn');
-    if (exportBtn) exportBtn.addEventListener('click', () => exportGPX());
+    if (exportBtn) {
+        exportBtn.addEventListener('click', () => {
+            if (APP.currentRoute) exportGPX();
+        });
+    }
 
     const newRouteBtn = document.getElementById('newRouteBtn');
     if (newRouteBtn) newRouteBtn.addEventListener('click', startNewRoute);
+
+    // Setup GPX file drop on sidebar
+    const sidebarCard = document.querySelector('.sidebar-card');
+    if (sidebarCard) {
+        sidebarCard.addEventListener('dragover', (e) => {
+            // Only handle file drops, not waypoint reordering
+            if (!e.dataTransfer.types.includes('Files')) {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            sidebarCard.classList.add('drag-over');
+        });
+        
+        sidebarCard.addEventListener('dragleave', (e) => {
+            if (!e.dataTransfer.types.includes('Files')) {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            sidebarCard.classList.remove('drag-over');
+        });
+        
+        sidebarCard.addEventListener('drop', (e) => {
+            if (!e.dataTransfer.types.includes('Files')) {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            sidebarCard.classList.remove('drag-over');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].name.toLowerCase().endsWith('.gpx')) {
+                parseGPXFile(files[0]);
+            }
+        });
+    }
 
     // Map Event Listeners
     APP.map.on('click', (e) => {
@@ -114,6 +156,45 @@ document.addEventListener('DOMContentLoaded', () => {
     APP.map.on('contextmenu', (e) => {
         UI.handleMapRightClick(e);
     });
+
+    // Collapse functionality
+    const collapseSidebarBtn = document.getElementById('collapseSidebarBtn');
+    if (collapseSidebarBtn && sidebarCard) {
+        collapseSidebarBtn.addEventListener('click', () => {
+            sidebarCard.classList.toggle('collapsed');
+            const icon = collapseSidebarBtn.querySelector('svg polyline');
+            if (icon) {
+                icon.setAttribute('points', sidebarCard.classList.contains('collapsed') ? '6 9 12 15 18 9' : '18 15 12 9 6 15');
+            }
+        });
+    }
+
+    const collapseElevationBtn = document.getElementById('collapseElevationBtn');
+    const elevationCard = document.getElementById('elevationCard');
+    if (collapseElevationBtn && elevationCard) {
+        // Start collapsed on mobile
+        if (window.innerWidth <= 768) {
+            elevationCard.classList.add('collapsed');
+            const icon = collapseElevationBtn.querySelector('svg polyline');
+            if (icon) {
+                icon.setAttribute('points', '18 15 12 9 6 15');
+            }
+        }
+        
+        collapseElevationBtn.addEventListener('click', () => {
+            elevationCard.classList.toggle('collapsed');
+            const icon = collapseElevationBtn.querySelector('svg polyline');
+            if (icon) {
+                icon.setAttribute('points', elevationCard.classList.contains('collapsed') ? '18 15 12 9 6 15' : '6 9 12 15 18 9');
+            }
+            // Re-render elevation when expanding to fix empty canvas issue
+            if (!elevationCard.classList.contains('collapsed') && APP.elevationData) {
+                setTimeout(() => {
+                    renderElevationProfile(APP.elevationData);
+                }, 100);
+            }
+        });
+    }
 });
 
 
@@ -612,7 +693,23 @@ function parseGPXFile(file) {
             UI.updatePointTypes();
             UI.renderRoutePoints();
             UI.updateMapMarkers();
+            UI.showRouteContent();
             calculateRoute();
+
+            // Zoom to imported route
+            if (APP.map && trkpts.length > 0) {
+                const bounds = L.latLngBounds(
+                    Array.from(trkpts).map(pt => [
+                        parseFloat(pt.getAttribute('lat')),
+                        parseFloat(pt.getAttribute('lon'))
+                    ])
+                );
+                const isMobile = window.innerWidth <= 768;
+                APP.map.fitBounds(bounds, {
+                    paddingTopLeft: isMobile ? [20, 20] : [400, 50],
+                    paddingBottomRight: isMobile ? [20, 20] : [50, 260]
+                });
+            }
 
             // Reverse Geocode
             APP.routePoints.forEach(point => {
@@ -822,12 +919,13 @@ function setupAuthUI() {
     saveRouteBtn?.addEventListener('click', async () => {
         if (!APP.currentRoute) return;
 
-        // Collect metadata
+        // Collect metadata and generate thumbnail
         const metadata = {
             distance: document.getElementById('elev-distance-val')?.textContent || '0 km',
             duration: document.getElementById('elev-duration-val')?.textContent || '0m',
             gain: document.getElementById('elev-gain-val')?.textContent || '0 m',
-            loss: document.getElementById('elev-loss-val')?.textContent || '0 m'
+            loss: document.getElementById('elev-loss-val')?.textContent || '0 m',
+            elevationThumbnail: APP.elevationData ? generateElevationThumbnail(APP.elevationData) : null
         };
 
         if (APP.activeRouteId) {
@@ -849,13 +947,21 @@ function setupAuthUI() {
                         // Apply smoothing before saving (same as used for gain/loss calculation)
                         const smoothedData = smoothElevationData(APP.elevationData);
                         
-                        // Replace the route geometry with densely sampled points that have elevation
-                        const newCoordinates = smoothedData.map(point => {
+                        // Aggressively downsample to max 200 points to reduce payload size
+                        const step = Math.max(1, Math.floor(smoothedData.length / 200));
+                        const downsampledData = smoothedData.filter((_, i) => i % step === 0 || i === smoothedData.length - 1);
+                        
+                        // Replace the route geometry with downsampled points that have elevation
+                        const newCoordinates = downsampledData.map(point => {
                             return [point.lng, point.lat, Math.round(point.elev)];
                         });
                         routeToSave.geometry.coordinates = newCoordinates;
-                        console.log(`Updating route with ${newCoordinates.length} smoothed elevation points (was ${APP.currentRoute.geometry.coordinates.length})`);
                     }
+                    
+                    // Remove unnecessary data to reduce payload
+                    delete routeToSave.legs;
+                    delete routeToSave.weight_name;
+                    delete routeToSave.weight;
                     
                     await AUTH.updateExistingRoute(APP.activeRouteId, APP.activeRouteName, {
                         points: APP.routePoints,
@@ -891,13 +997,21 @@ function setupAuthUI() {
                 // Apply smoothing before saving (same as used for gain/loss calculation)
                 const smoothedData = smoothElevationData(APP.elevationData);
                 
-                // Replace the route geometry with densely sampled points that have elevation
-                const newCoordinates = smoothedData.map(point => {
+                // Aggressively downsample to max 600 points to reduce payload size
+                const step = Math.max(1, Math.floor(smoothedData.length / 600));
+                const downsampledData = smoothedData.filter((_, i) => i % step === 0 || i === smoothedData.length - 1);
+                
+                // Replace the route geometry with downsampled points that have elevation
+                const newCoordinates = downsampledData.map(point => {
                     return [point.lng, point.lat, Math.round(point.elev)];
                 });
                 routeToSave.geometry.coordinates = newCoordinates;
-                console.log(`Saving route with ${newCoordinates.length} smoothed elevation points (was ${APP.currentRoute.geometry.coordinates.length})`);
             }
+            
+            // Remove unnecessary data to reduce payload
+            delete routeToSave.legs;
+            delete routeToSave.weight_name;
+            delete routeToSave.weight;
             
             const res = await AUTH.saveRoute(sanitizedName, {
                 points: APP.routePoints,
@@ -1100,9 +1214,11 @@ async function renderSavedRoutes() {
             const meta = r.data.metadata || {};
             const dist = meta.distance || '0 km';
             const elev = (meta.gain && meta.loss) ? `${meta.gain} / ${meta.loss}` : '--';
+            const thumbnail = meta.elevationThumbnail || '';
+            const bgStyle = thumbnail ? `style="background-image: url('${thumbnail}'); background-size: calc(100% + 28px) 52px; background-position: center; background-repeat: no-repeat;"` : '';
 
             return `
-            <div class="saved-route-item ${APP.activeRouteId === r.id ? 'active' : ''}" data-id="${r.id}">
+            <div class="saved-route-item ${APP.activeRouteId === r.id ? 'active' : ''}" data-id="${r.id}" ${bgStyle}>
                 <div class="saved-route-info">
                     <div class="saved-route-name">${r.name}</div>
                     <div class="saved-route-meta">
@@ -1112,7 +1228,7 @@ async function renderSavedRoutes() {
                 </div>
                 <div class="saved-route-actions">
                     ${hasDeviceCreds ? `<button class="btn-route-action btn-upload" title="Upload to Device" data-id="${r.id}" onclick="event.stopPropagation(); uploadRouteToDevice('${r.id}')">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="5" y1="18" x2="19" y2="18"></line><line x1="12" y1="18" x2="12" y2="22"></line></svg>
                     </button>` : ''}
                     <button class="btn-route-action btn-rename" title="Rename" data-id="${r.id}">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
@@ -1212,9 +1328,10 @@ function loadSavedRoute(route) {
     // Zoom to route - Use correct Leaflet fitBounds options
     if (route.data.route && route.data.route.geometry && APP.map) {
         const bounds = L.geoJSON(route.data.route.geometry).getBounds();
+        const isMobile = window.innerWidth <= 768;
         APP.map.fitBounds(bounds, {
-            paddingTopLeft: [400, 50], // Avoid sidebar
-            paddingBottomRight: [50, 260] // Avoid elevation card
+            paddingTopLeft: isMobile ? [20, 20] : [400, 50], // Avoid sidebar
+            paddingBottomRight: isMobile ? [20, 20] : [50, 260] // Avoid elevation card
         });
     }
 }
@@ -1250,12 +1367,20 @@ async function startNewRoute() {
 
     updateRoutePointsLabel();
     updateUIForAuth(AUTH.user); // updates save/new buttons
+    updateSaveButton(); // updates export button
 }
 
 function updateSaveButton() {
     const saveRouteBtn = document.getElementById('saveRouteBtn');
     if (saveRouteBtn && AUTH.isAuthenticated()) {
         saveRouteBtn.style.display = APP.currentRoute ? 'flex' : 'none';
+    }
+    
+    const exportBtn = document.getElementById('exportGpxHeaderBtn');
+    if (exportBtn) {
+        exportBtn.disabled = !APP.currentRoute;
+        exportBtn.style.opacity = APP.currentRoute ? '1' : '0.5';
+        exportBtn.style.cursor = APP.currentRoute ? 'pointer' : 'not-allowed';
     }
 }
 
@@ -1544,11 +1669,11 @@ window.uploadRouteToDevice = async function(routeId) {
         await UI_MODAL.alert('Success', 'Route uploaded to device!');
         
         btn.disabled = false;
-        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>';
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="5" y1="18" x2="19" y2="18"></line><line x1="12" y1="18" x2="12" y2="22"></line></svg>';
     } catch (err) {
         await UI_MODAL.alert('Error', err.message);
         const btn = event.target.closest('button');
         btn.disabled = false;
-        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>';
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="5" y1="18" x2="19" y2="18"></line><line x1="12" y1="18" x2="12" y2="22"></line></svg>';
     }
 };
