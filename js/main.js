@@ -147,7 +147,7 @@ async function calculateRoute() {
 
     try {
         const coordString = validPoints.map(c => `${c.lng},${c.lat}`).join(';');
-        const url = `${CONFIG.OSRMAPI}/route/v1/driving/${coordString}?overview=full&geometries=geojson&steps=true&annotations=distance,duration`;
+        const url = `${CONFIG.OSRMAPI}/route/v1/${APP.selectedProfile}/${coordString}?overview=full&geometries=geojson&steps=true&annotations=distance,duration`;
 
         const response = await fetch(url);
         if (!response.ok) return;
@@ -330,6 +330,64 @@ function routeMouseUpHandler(e) {
 
 // ==================== UTILS ====================
 
+function smoothElevationData(elevArray) {
+    if (elevArray.length < 3) return elevArray;
+
+    // Apply three-pass smoothing with doubled window sizes
+    // First pass: window size 30
+    let smoothed = [];
+    let windowSize = 30;
+
+    for (let i = 0; i < elevArray.length; i++) {
+        let sum = 0, count = 0;
+        const start = Math.max(0, i - Math.floor(windowSize / 2));
+        const end = Math.min(elevArray.length - 1, i + Math.floor(windowSize / 2));
+
+        for (let j = start; j <= end; j++) {
+            sum += elevArray[j].elev;
+            count++;
+        }
+
+        smoothed.push({ ...elevArray[i], elev: sum / count });
+    }
+
+    // Second pass: window size 22
+    const secondSmoothed = [];
+    windowSize = 22;
+
+    for (let i = 0; i < smoothed.length; i++) {
+        let sum = 0, count = 0;
+        const start = Math.max(0, i - Math.floor(windowSize / 2));
+        const end = Math.min(smoothed.length - 1, i + Math.floor(windowSize / 2));
+
+        for (let j = start; j <= end; j++) {
+            sum += smoothed[j].elev;
+            count++;
+        }
+
+        secondSmoothed.push({ ...elevArray[i], elev: sum / count });
+    }
+
+    // Third pass: window size 14
+    const finalSmoothed = [];
+    windowSize = 14;
+
+    for (let i = 0; i < secondSmoothed.length; i++) {
+        let sum = 0, count = 0;
+        const start = Math.max(0, i - Math.floor(windowSize / 2));
+        const end = Math.min(secondSmoothed.length - 1, i + Math.floor(windowSize / 2));
+
+        for (let j = start; j <= end; j++) {
+            sum += secondSmoothed[j].elev;
+            count++;
+        }
+
+        finalSmoothed.push({ ...elevArray[i], elev: sum / count });
+    }
+
+    return finalSmoothed;
+}
+
 function distanceToLineSegment(point, lineStart, lineEnd) {
     const dx = lineEnd.lng - lineStart.lng;
     const dy = lineEnd.lat - lineStart.lat;
@@ -458,14 +516,31 @@ function removeRoutePreview() {
 
 function generateGPX(name = 'Route') {
     const date = new Date().toISOString();
+    const routeName = APP.activeRouteName || name;
+    const duration = APP.currentRoute?.duration || 0;
+    
     let coords = [];
-    if (APP.currentRoute && APP.currentRoute.geometry && Array.isArray(APP.currentRoute.geometry.coordinates)) {
+    let elevations = [];
+    
+    // Use elevation data if available and apply smoothing
+    if (APP.elevationData && APP.elevationData.length > 0) {
+        const smoothedData = smoothElevationData(APP.elevationData);
+        coords = smoothedData.map(p => [p.lng, p.lat]);
+        elevations = smoothedData.map(p => Math.round(p.elev));
+    } else if (APP.currentRoute && APP.currentRoute.geometry && Array.isArray(APP.currentRoute.geometry.coordinates)) {
         coords = APP.currentRoute.geometry.coordinates;
     } else {
         coords = APP.routePoints.filter(p => p.lat !== null && p.lng !== null).map(p => [p.lng, p.lat]);
     }
-    const trkpts = coords.map(([lon, lat]) => `        <trkpt lat="${lat}" lon="${lon}"/>`).join('\n');
-    return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Route Planner">\n  <metadata><name>${name}</name><time>${date}</time></metadata>\n  <trk><name>${name}</name><trkseg>\n${trkpts}\n    </trkseg></trk>\n</gpx>`;
+    
+    const trkpts = coords.map(([lon, lat], i) => {
+        const ele = elevations[i] !== undefined ? `\n          <ele>${elevations[i]}</ele>` : '';
+        return `        <trkpt lat="${lat}" lon="${lon}">${ele}\n        </trkpt>`;
+    }).join('\n');
+    
+    const durationExt = duration > 0 ? `\n    <extensions>\n      <duration>${Math.round(duration)}</duration>\n    </extensions>` : '';
+    
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Route Planner" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata>\n    <name>${routeName}</name>\n    <time>${date}</time>\n  </metadata>\n  <trk>\n    <name>${routeName}</name>${durationExt}\n    <trkseg>\n${trkpts}\n    </trkseg>\n  </trk>\n</gpx>`;
 }
 
 function exportGPX(filename = 'route.gpx') {
@@ -766,13 +841,28 @@ function setupAuthUI() {
             if (mode === true) {
                 // Update existing
                 try {
+                    // Add elevation data to route geometry before updating
+                    const routeToSave = JSON.parse(JSON.stringify(APP.currentRoute));
+                    
+                    // Use the densely sampled elevation data from APP.elevationData
+                    if (APP.elevationData && APP.elevationData.length > 0) {
+                        // Apply smoothing before saving (same as used for gain/loss calculation)
+                        const smoothedData = smoothElevationData(APP.elevationData);
+                        
+                        // Replace the route geometry with densely sampled points that have elevation
+                        const newCoordinates = smoothedData.map(point => {
+                            return [point.lng, point.lat, Math.round(point.elev)];
+                        });
+                        routeToSave.geometry.coordinates = newCoordinates;
+                        console.log(`Updating route with ${newCoordinates.length} smoothed elevation points (was ${APP.currentRoute.geometry.coordinates.length})`);
+                    }
+                    
                     await AUTH.updateExistingRoute(APP.activeRouteId, APP.activeRouteName, {
                         points: APP.routePoints,
-                        route: APP.currentRoute,
+                        route: routeToSave,
                         metadata
                     });
                     renderSavedRoutes();
-                    await UI_MODAL.alert("Success", "Route updated successfully!");
                 } catch (err) {
                     await UI_MODAL.alert("Error", "Failed to update route: " + err.message);
                 }
@@ -793,9 +883,25 @@ function setupAuthUI() {
         if (!sanitizedName) return; // ignore completely empty after sanitization
 
         try {
+            // Add elevation data to route geometry before saving
+            const routeToSave = JSON.parse(JSON.stringify(APP.currentRoute));
+            
+            // Use the densely sampled elevation data from APP.elevationData
+            if (APP.elevationData && APP.elevationData.length > 0) {
+                // Apply smoothing before saving (same as used for gain/loss calculation)
+                const smoothedData = smoothElevationData(APP.elevationData);
+                
+                // Replace the route geometry with densely sampled points that have elevation
+                const newCoordinates = smoothedData.map(point => {
+                    return [point.lng, point.lat, Math.round(point.elev)];
+                });
+                routeToSave.geometry.coordinates = newCoordinates;
+                console.log(`Saving route with ${newCoordinates.length} smoothed elevation points (was ${APP.currentRoute.geometry.coordinates.length})`);
+            }
+            
             const res = await AUTH.saveRoute(sanitizedName, {
                 points: APP.routePoints,
-                route: APP.currentRoute,
+                route: routeToSave,
                 metadata
             });
             APP.activeRouteId = res.id;
@@ -900,6 +1006,9 @@ function setupAuthUI() {
 
     // Initial UI state
     updateUIForAuth(AUTH.user);
+
+    // Device Credentials Handlers
+    setupDeviceCredentialsUI();
 }
 
 function updateUIForAuth(user) {
@@ -980,6 +1089,8 @@ async function renderSavedRoutes() {
 
     try {
         const routes = await AUTH.getSavedRoutes();
+        const hasDeviceCreds = await AUTH.getDeviceCredentials();
+        
         if (routes.length === 0) {
             list.innerHTML = '<div class="empty-state">No saved routes yet</div>';
             return;
@@ -1000,6 +1111,9 @@ async function renderSavedRoutes() {
                     </div>
                 </div>
                 <div class="saved-route-actions">
+                    ${hasDeviceCreds ? `<button class="btn-route-action btn-upload" title="Upload to Device" data-id="${r.id}" onclick="event.stopPropagation(); uploadRouteToDevice('${r.id}')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+                    </button>` : ''}
                     <button class="btn-route-action btn-rename" title="Rename" data-id="${r.id}">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                     </button>
@@ -1013,13 +1127,12 @@ async function renderSavedRoutes() {
 
         list.querySelectorAll('.saved-route-item').forEach(item => {
             item.addEventListener('click', (e) => {
-                // Ignore if clicked on an action button
                 if (e.target.closest('.btn-route-action')) return;
 
                 const routeId = item.dataset.id;
                 const route = routes.find(r => r.id === routeId);
                 if (route) {
-                    loadSavedRoute(route); // Pass the whole route object now
+                    loadSavedRoute(route);
                     const userProfileModal = document.getElementById('userProfileModal');
                     if (userProfileModal) userProfileModal.classList.remove('active');
                 }
@@ -1316,5 +1429,126 @@ window.demoteUser = async function(username) {
         loadAdminUsers();
     } catch (err) {
         await UI_MODAL.alert('Error', err.message);
+    }
+};
+
+function setupDeviceCredentialsUI() {
+    const testBtn = document.getElementById('testDeviceCredsBtn');
+    const saveBtn = document.getElementById('saveDeviceCredsBtn');
+    const deleteBtn = document.getElementById('deleteDeviceCredsBtn');
+    const emailInput = document.getElementById('oneLapFitEmail');
+    const passwordInput = document.getElementById('oneLapFitPassword');
+
+    // Load existing credentials when devices tab is opened
+    document.querySelector('.tab-btn[data-tab="devices"]')?.addEventListener('click', loadDeviceCredentials);
+
+    testBtn?.addEventListener('click', async () => {
+        const email = emailInput.value;
+        const password = passwordInput.value;
+
+        if (!email || !password) {
+            await UI_MODAL.alert('Error', 'Please fill in all fields');
+            return;
+        }
+
+        testBtn.disabled = true;
+        testBtn.textContent = 'Testing...';
+
+        try {
+            await AUTH.saveDeviceCredentials({
+                onelapfit_email: email,
+                onelapfit_password: password
+            });
+            await UI_MODAL.alert('Success', 'Credentials are valid!');
+            deleteBtn.style.display = 'block';
+        } catch (err) {
+            await UI_MODAL.alert('Error', err.message);
+        } finally {
+            testBtn.disabled = false;
+            testBtn.textContent = 'Test Connection';
+        }
+    });
+
+    saveBtn?.addEventListener('click', async () => {
+        const email = emailInput.value;
+        const password = passwordInput.value;
+
+        if (!email || !password) {
+            await UI_MODAL.alert('Error', 'Please fill in all fields');
+            return;
+        }
+
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+
+        try {
+            await AUTH.saveDeviceCredentials({
+                onelapfit_email: email,
+                onelapfit_password: password
+            });
+            await UI_MODAL.alert('Success', 'Credentials saved successfully!');
+            deleteBtn.style.display = 'block';
+        } catch (err) {
+            await UI_MODAL.alert('Error', err.message);
+        } finally {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save';
+        }
+    });
+
+    deleteBtn?.addEventListener('click', async () => {
+        const confirmed = await UI_MODAL.confirm('Disconnect Device', 'Remove device credentials?', 'Remove', 'Cancel');
+        if (!confirmed) return;
+
+        try {
+            await AUTH.deleteDeviceCredentials();
+            emailInput.value = '';
+            passwordInput.value = '';
+            deleteBtn.style.display = 'none';
+            await UI_MODAL.alert('Success', 'Device disconnected');
+        } catch (err) {
+            await UI_MODAL.alert('Error', err.message);
+        }
+    });
+}
+
+async function loadDeviceCredentials() {
+    const emailInput = document.getElementById('oneLapFitEmail');
+    const passwordInput = document.getElementById('oneLapFitPassword');
+    const deleteBtn = document.getElementById('deleteDeviceCredsBtn');
+
+    try {
+        const creds = await AUTH.getDeviceCredentials();
+        if (creds) {
+            emailInput.value = creds.onelapfit_email;
+            passwordInput.value = creds.onelapfit_password;
+            deleteBtn.style.display = 'block';
+        } else {
+            deleteBtn.style.display = 'none';
+        }
+    } catch (err) {
+        deleteBtn.style.display = 'none';
+    }
+}
+
+window.uploadRouteToDevice = async function(routeId) {
+    event.stopPropagation();
+    event.preventDefault();
+    
+    try {
+        const btn = event.target.closest('button');
+        btn.disabled = true;
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
+        
+        await AUTH.uploadRouteToDevice(routeId);
+        await UI_MODAL.alert('Success', 'Route uploaded to device!');
+        
+        btn.disabled = false;
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>';
+    } catch (err) {
+        await UI_MODAL.alert('Error', err.message);
+        const btn = event.target.closest('button');
+        btn.disabled = false;
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>';
     }
 };

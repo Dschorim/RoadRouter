@@ -334,5 +334,63 @@ export const AUTH = {
             throw new Error(error || 'Failed to demote user');
         }
         return true;
+    },
+
+    async saveDeviceCredentials(credentials) {
+        if (!this.isAuthenticated()) throw new Error('Not authenticated');
+
+        const response = await fetch('/api/user/device-credentials', {
+            method: 'POST',
+            headers: {
+                ...this.getAuthHeader(),
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(credentials)
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(error || 'Failed to save credentials');
+        }
+        return true;
+    },
+
+    async getDeviceCredentials() {
+        if (!this.isAuthenticated()) throw new Error('Not authenticated');
+
+        const response = await fetch('/api/user/device-credentials', {
+            headers: this.getAuthHeader()
+        });
+
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error('Failed to fetch credentials');
+        return await response.json();
+    },
+
+    async deleteDeviceCredentials() {
+        if (!this.isAuthenticated()) throw new Error('Not authenticated');
+
+        const response = await fetch('/api/user/device-credentials', {
+            method: 'DELETE',
+            headers: this.getAuthHeader()
+        });
+
+        if (!response.ok) throw new Error('Failed to delete credentials');
+        return true;
+    },
+
+    async uploadRouteToDevice(routeId) {
+        if (!this.isAuthenticated()) throw new Error('Not authenticated');
+
+        const response = await fetch(`/api/user/routes/${routeId}/upload`, {
+            method: 'POST',
+            headers: this.getAuthHeader()
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(error || 'Failed to upload route');
+        }
+        return true;
     }
 };

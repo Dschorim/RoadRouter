@@ -213,30 +213,6 @@ After running this command:
 - MFA is disabled (can be re-enabled in settings)
 - Change the password immediately after logging in
 
-### Reset User Password (Browser Console)
-
-If a user forgets their password or is locked out due to MFA issues, an admin can reset it using the browser console:
-
-```javascript
-// Open browser console (F12) while logged in as admin
-fetch('/api/admin/reset-password', {
-  method: 'POST',
-  headers: {
-    'Authorization': `Bearer ${JSON.parse(localStorage.getItem('route_planner_auth')).token}`,
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    username: 'username_to_reset',
-    new_password: 'new_temporary_password'
-  })
-}).then(r => r.text()).then(console.log);
-```
-
-This will:
-- Reset the user's password to the specified value
-- Clear any MFA settings (user will need to set up MFA again)
-- Allow the user to log in with the new password
-
 ## Browser Compatibility
 
 - Chrome/Chromium 90+

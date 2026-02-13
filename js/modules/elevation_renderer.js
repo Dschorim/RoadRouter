@@ -16,7 +16,7 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
 }
 
 // Sample route coordinates progressively - start coarse, refine over time
-function sampleRouteCoordinates(coords, intervalMeters = 50) {
+function sampleRouteCoordinates(coords, intervalMeters = 10) {
     if (!coords || coords.length === 0) return [];
     const samples = [];
 
@@ -154,30 +154,14 @@ async function fetchElevationsProgressive(points, onProgress) {
 function computeGainLoss(elevArray) {
     if (elevArray.length < 3) return { gain: 0, loss: 0 };
 
-    // Apply moving average smoothing (window size 5)
-    const smoothed = [];
-    const windowSize = 5;
-
-    for (let i = 0; i < elevArray.length; i++) {
-        let sum = 0, count = 0;
-        const start = Math.max(0, i - Math.floor(windowSize / 2));
-        const end = Math.min(elevArray.length - 1, i + Math.floor(windowSize / 2));
-
-        for (let j = start; j <= end; j++) {
-            sum += elevArray[j].elev;
-            count++;
-        }
-
-        smoothed.push({ ...elevArray[i], elev: sum / count });
-    }
-
-    // Calculate gain/loss with 3m threshold on smoothed data
+    // Data is already smoothed when saved, no need to smooth again
+    // Calculate gain/loss with 3m threshold
     const THRESHOLD = 3;
     let gain = 0, loss = 0;
-    let lastElev = smoothed[0].elev;
+    let lastElev = elevArray[0].elev;
 
-    for (let i = 1; i < smoothed.length; i++) {
-        const diff = smoothed[i].elev - lastElev;
+    for (let i = 1; i < elevArray.length; i++) {
+        const diff = elevArray[i].elev - lastElev;
 
         if (Math.abs(diff) >= THRESHOLD) {
             if (diff > 0) {
@@ -185,7 +169,7 @@ function computeGainLoss(elevArray) {
             } else {
                 loss += -diff;
             }
-            lastElev = smoothed[i].elev;
+            lastElev = elevArray[i].elev;
         }
     }
 
@@ -199,7 +183,8 @@ export async function fetchAndRenderElevation() {
 
     const coords = APP.currentRoute.geometry.coordinates;
 
-    const samples = sampleRouteCoordinates(coords, 25); // 25m intervals for smoother curve
+    // Always sample at 10m for accurate gain/loss calculation
+    const samples = sampleRouteCoordinates(coords, 10);
     if (!samples || samples.length === 0) {
         return;
     }
@@ -212,7 +197,10 @@ export async function fetchAndRenderElevation() {
         const lossEl = document.getElementById('elev-loss-val');
         if (gainEl) gainEl.textContent = `${gain} m`;
         if (lossEl) lossEl.textContent = `${loss} m`;
-        renderElevationProfile(partialResults);
+        
+        // Downsample for display only
+        const displayData = downsampleForDisplay(partialResults);
+        renderElevationProfile(displayData);
     });
 
     if (!elevRes) {
@@ -229,7 +217,32 @@ export async function fetchAndRenderElevation() {
     if (gainEl) gainEl.textContent = `${gain} m`;
     if (lossEl) lossEl.textContent = `${loss} m`;
 
-    renderElevationProfile(elevRes);
+    // Downsample for display only
+    const displayData = downsampleForDisplay(elevRes);
+    renderElevationProfile(displayData);
+}
+
+// Downsample elevation data for display based on total points
+function downsampleForDisplay(data) {
+    if (!data || data.length === 0) return data;
+    
+    const targetPoints = 750;
+    if (data.length <= targetPoints) return data;
+    
+    // Calculate step to achieve target points
+    const step = Math.ceil(data.length / targetPoints);
+    const downsampled = [];
+    
+    for (let i = 0; i < data.length; i += step) {
+        downsampled.push(data[i]);
+    }
+    
+    // Always include last point
+    if (downsampled[downsampled.length - 1] !== data[data.length - 1]) {
+        downsampled.push(data[data.length - 1]);
+    }
+    
+    return downsampled;
 }
 
 function getGradientColor(grade) {
@@ -366,14 +379,56 @@ export function renderElevationProfile(data) {
         sideScale.innerHTML = `<div>${Math.round(maxE)} m</div><div style="opacity:0.6">${Math.round((maxE + minE) / 2)} m</div><div>${Math.round(minE)} m</div>`;
     }
 
+    // Store chart state to avoid full redraws on hover
+    let chartState = { data, width, height, pad, chartWidth, chartHeight, minE, maxE, grades };
+    let lastIdx = -1;
+    let rafId = null;
+    let moveCount = 0;
+
     // attach mouse events
     canvas.onmousemove = function (evt) {
+        moveCount++;
         const rect = canvas.getBoundingClientRect();
         const mouseX = (evt.clientX - rect.left);
         const rel = Math.max(0, Math.min(1, (mouseX - pad) / (width - pad * 2)));
         const idx = Math.round(rel * (data.length - 1));
         const point = data[idx];
         if (!point) return;
+
+        console.log(`[Tooltip] Move #${moveCount}: idx=${idx}, lastIdx=${lastIdx}, clientX=${evt.clientX}, clientY=${evt.clientY}`);
+
+        // Cancel any pending animation frame
+        if (rafId) cancelAnimationFrame(rafId);
+
+        // Update tooltip position immediately without waiting for index change
+        rafId = requestAnimationFrame(() => {
+            if (tooltip) {
+                tooltip.style.display = 'block';
+                const tooltipRect = tooltip.getBoundingClientRect();
+                const tooltipWidth = tooltipRect.width || 200;
+                const tooltipHeight = tooltipRect.height || 60;
+                
+                let left = evt.clientX + 10;
+                let top = evt.clientY - tooltipHeight - 10;
+
+                if (left + tooltipWidth > window.innerWidth) {
+                    left = evt.clientX - tooltipWidth - 10;
+                }
+                if (top < 0) {
+                    top = evt.clientY + 10;
+                }
+
+                console.log(`[Tooltip] RAF update: left=${left}, top=${top}, width=${tooltipWidth}, height=${tooltipHeight}`);
+                tooltip.style.left = left + 'px';
+                tooltip.style.top = top + 'px';
+            }
+        });
+
+        // Only update content and redraw when index changes
+        if (idx === lastIdx) return;
+        lastIdx = idx;
+
+        console.log(`[Tooltip] Index changed to ${idx}, updating content`);
 
         // Calculate gradient at this point
         let gradient = 0;
@@ -385,24 +440,8 @@ export function renderElevationProfile(data) {
             gradient = distDiff > 0 ? (elevDiff / distDiff) * 100 : 0;
         }
 
-        // position tooltip - ensure it stays on screen
+        // Update tooltip content
         if (tooltip) {
-            const tooltipWidth = 200;
-            const tooltipHeight = 60;
-            let left = evt.clientX + 10;
-            let top = evt.clientY - tooltipHeight - 10;
-
-            if (left + tooltipWidth > window.innerWidth) {
-                left = evt.clientX - tooltipWidth - 10;
-            }
-            if (top < 0) {
-                top = evt.clientY + 10;
-            }
-
-            tooltip.style.left = left + 'px';
-            tooltip.style.top = top + 'px';
-            tooltip.style.display = 'block';
-
             const gradientText = gradient > 0 ? `+${gradient.toFixed(1)}%` : `${gradient.toFixed(1)}%`;
             const gradientColor = Math.abs(gradient) > 8 ? (gradient > 0 ? '#ff4444' : '#44ff44') : '#ccc';
 
@@ -412,27 +451,19 @@ export function renderElevationProfile(data) {
             `;
         }
 
-        // draw vertical line overlay on canvas
-        ctx.clearRect(0, 0, width, height);
-
-        // redraw with gradient colors (fill only - simplified for performance on hover)
-        // ... (Full redraw is safer to keep same visuals)
-        renderElevationProfile(data); // Simple re-render with static visual, then draw cursor
-
-        // vertical line at hover position
-        ctx.beginPath();
-        const vx = (idx / (data.length - 1)) * chartWidth + pad;
-        ctx.moveTo(vx, pad);
-        ctx.lineTo(vx, height - pad);
-        ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-        ctx.lineWidth = 1;
-        ctx.stroke();
+        // Redraw only the cursor line without full chart redraw
+        drawCursorLine(ctx, chartState, idx);
 
         // update map preview at this point
         createOrUpdateRoutePreview(point);
     };
 
     canvas.onmouseleave = function () {
+        lastIdx = -1;
+        if (rafId) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+        }
         const tooltip = document.getElementById('elevationTooltip');
         if (tooltip) tooltip.style.display = 'none';
 
@@ -441,6 +472,72 @@ export function renderElevationProfile(data) {
 
         renderElevationProfile(data);
     };
+}
+
+// Helper to draw just the cursor line without full redraw
+function drawCursorLine(ctx, state, idx) {
+    const { data, width, height, pad, chartWidth, chartHeight, minE, maxE, grades } = state;
+    
+    ctx.clearRect(0, 0, width, height);
+
+    // Redraw filled areas
+    for (let i = 0; i < data.length - 1; i++) {
+        const grade = grades[i];
+        const color = getGradientColor(grade);
+
+        const x1 = (i / (data.length - 1)) * chartWidth + pad;
+        const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1;
+        const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+        const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+
+        if (color) {
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.lineTo(x2, height - pad);
+            ctx.lineTo(x1, height - pad);
+            ctx.closePath();
+            ctx.fillStyle = color;
+            ctx.fill();
+        } else {
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.lineTo(x2, height - pad);
+            ctx.lineTo(x1, height - pad);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(50,184,198,0.12)';
+            ctx.fill();
+        }
+    }
+
+    // Redraw stroke lines
+    for (let i = 0; i < data.length - 1; i++) {
+        const grade = grades[i];
+        const color = getGradientStrokeColor(grade);
+
+        const x1 = (i / (data.length - 1)) * chartWidth + pad;
+        const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1;
+        const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+        const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'square';
+        ctx.stroke();
+    }
+
+    // Draw vertical cursor line
+    ctx.beginPath();
+    const vx = (idx / (data.length - 1)) * chartWidth + pad;
+    ctx.moveTo(vx, pad);
+    ctx.lineTo(vx, height - pad);
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
 }
 
 export function drawElevationCursor(routePoint) {

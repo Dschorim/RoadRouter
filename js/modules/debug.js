@@ -8,6 +8,9 @@ let debugTileLayer = null;
 let speedStats = { min: Infinity, max: 0, speeds: [] };
 let debugLegendControl = null;
 let isDarkModeActive = false; // Track dark mode state
+let debugTooltip = null; // Tooltip element for speed display
+let mapHoverHandler = null; // Map-level hover handler
+let osmDataCache = new Map(); // Cache for OSM data lookups
 
 // Callback to update route style in main app
 let _updateRouteStyleCallback = null;
@@ -63,17 +66,20 @@ function loadDebugVisualization() {
                 const x = coords.x;
                 const y = coords.y;
 
-                this.fetchAndRenderTile(ctx, x, y, z, size);
+                this.fetchAndRenderTile(ctx, x, y, z, size, canvas, coords);
 
                 return canvas;
             },
 
-            fetchAndRenderTile: function (ctx, x, y, z, size) {
+            fetchAndRenderTile: function (ctx, x, y, z, size, canvas, coords) {
                 const url = `${CONFIG.OSRMAPI}/tile/v1/driving/tile(${x},${y},${z}).mvt`;
 
                 fetch(url)
                     .then(r => {
                         if (!r.ok) {
+                            if (r.status === 400) {
+                                console.warn('OSRM tiles not available. Tiles require data to be prepared with --generate-edge-expanded-edges flag.');
+                            }
                             this.drawEmptyTile(ctx, size);
                             return null;
                         }
@@ -83,7 +89,7 @@ function loadDebugVisualization() {
                         if (!buffer) return;
 
                         try {
-                            this.renderTile(ctx, buffer, size, z);
+                            this.renderTile(ctx, buffer, size, z, canvas, coords);
                         } catch (e) {
                             console.error('Tile render error:', e);
                             this.drawEmptyTile(ctx, size);
@@ -94,7 +100,7 @@ function loadDebugVisualization() {
                     });
             },
 
-            renderTile: function (ctx, buffer, size, z) {
+            renderTile: function (ctx, buffer, size, z, canvas, coords) {
                 ctx.fillStyle = 'rgba(0, 0, 0, 0)';
                 ctx.fillRect(0, 0, size.x, size.y);
 
@@ -113,6 +119,10 @@ function loadDebugVisualization() {
                     });
 
                     updateDebugLegend();
+
+                    // Store features on canvas for hover detection
+                    canvas._debugFeatures = features;
+                    canvas._tileCoords = coords;
 
                     features.forEach(feature => {
                         const speed = feature.speed || 0;
@@ -171,6 +181,10 @@ function loadDebugVisualization() {
                 debugPane.style.pointerEvents = 'none';
             }
         }, 50);
+
+        // Add map-level hover handler
+        mapHoverHandler = (e) => handleMapHover(e);
+        APP.map.getContainer().addEventListener('mousemove', mapHoverHandler);
 
         createDebugLegendControl();
 
@@ -336,5 +350,135 @@ function removeDebugVisualization() {
         if (APP.map) APP.map.removeControl(debugLegendControl);
         debugLegendControl = null;
     }
+    if (mapHoverHandler && APP.map) {
+        APP.map.getContainer().removeEventListener('mousemove', mapHoverHandler);
+        mapHoverHandler = null;
+    }
+    hideDebugTooltip();
+    osmDataCache.clear();
     speedStats = { min: Infinity, max: 0, speeds: [] };
+}
+
+function handleMapHover(e) {
+    if (!debugTileLayer || APP.map.getZoom() < 15) {
+        hideDebugTooltip();
+        return;
+    }
+
+    const debugPane = debugTileLayer.getPane();
+    if (!debugPane) return;
+
+    const canvases = debugPane.querySelectorAll('canvas');
+    let closestFeature = null;
+    let minDist = 10;
+
+    canvases.forEach(canvas => {
+        if (!canvas._debugFeatures) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        if (x < 0 || y < 0 || x > canvas.width || y > canvas.height) return;
+
+        canvas._debugFeatures.forEach(feature => {
+            if (feature.geometry && feature.geometry.length > 0) {
+                feature.geometry.forEach(ring => {
+                    for (let i = 0; i < ring.length - 1; i++) {
+                        const p1 = ring[i];
+                        const p2 = ring[i + 1];
+                        const px1 = (p1.x / 4096) * canvas.width;
+                        const py1 = (p1.y / 4096) * canvas.height;
+                        const px2 = (p2.x / 4096) * canvas.width;
+                        const py2 = (p2.y / 4096) * canvas.height;
+
+                        const dist = distanceToSegment(x, y, px1, py1, px2, py2);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            closestFeature = feature;
+                        }
+                    }
+                });
+            }
+        });
+    });
+
+    if (closestFeature) {
+        showDebugTooltip(e.clientX, e.clientY, closestFeature.speed);
+    } else {
+        hideDebugTooltip();
+    }
+}
+
+function distanceToSegment(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len2 = dx * dx + dy * dy;
+    if (len2 === 0) return Math.sqrt((px - x1) ** 2 + (py - y1) ** 2);
+
+    let t = ((px - x1) * dx + (py - y1) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+
+    const nearX = x1 + t * dx;
+    const nearY = y1 + t * dy;
+
+    return Math.sqrt((px - nearX) ** 2 + (py - nearY) ** 2);
+}
+
+async function fetchOSMData(lat, lng) {
+    const cacheKey = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+    if (osmDataCache.has(cacheKey)) {
+        return osmDataCache.get(cacheKey);
+    }
+
+    try {
+        const query = `[out:json];way(around:10,${lat},${lng})["highway"];out tags;`;
+        const response = await fetch(`https://overpass.private.coffee/api/interpreter?data=${encodeURIComponent(query)}`);
+        const data = await response.json();
+        
+        const osmData = {};
+        if (data.elements && data.elements.length > 0) {
+            const way = data.elements[0];
+            osmData.highway = way.tags?.highway || null;
+            osmData.surface = way.tags?.surface || null;
+            osmData.smoothness = way.tags?.smoothness || null;
+            osmData.tracktype = way.tags?.tracktype || null;
+        }
+        
+        osmDataCache.set(cacheKey, osmData);
+        return osmData;
+    } catch (e) {
+        return {};
+    }
+}
+
+function showDebugTooltip(x, y, speed) {
+    if (!debugTooltip) {
+        debugTooltip = document.createElement('div');
+        debugTooltip.style.cssText = `
+            position: fixed;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 12px;
+            color: var(--color-text);
+            pointer-events: none;
+            z-index: 10000;
+            box-shadow: var(--shadow-md);
+            backdrop-filter: blur(8px);
+        `;
+        document.body.appendChild(debugTooltip);
+    }
+
+    debugTooltip.innerHTML = `<div style="font-weight: 600;">${speed.toFixed(0)} km/h</div>`;
+    debugTooltip.style.left = (x + 10) + 'px';
+    debugTooltip.style.top = (y - 30) + 'px';
+    debugTooltip.style.display = 'block';
+}
+
+function hideDebugTooltip() {
+    if (debugTooltip) {
+        debugTooltip.style.display = 'none';
+    }
 }

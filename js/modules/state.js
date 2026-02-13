@@ -1,4 +1,6 @@
 // state.js - Central application state
+import CONFIG from '../config.js';
+
 export const APP = {
     map: null,
     routeLayer: null,
@@ -27,7 +29,9 @@ export const APP = {
     attachedAutocompleteInputs: new Set(),
     elevationData: null,
     activeRouteId: null,
-    activeRouteName: null
+    activeRouteName: null,
+    availableProfiles: [],
+    selectedProfile: CONFIG.DEFAULT_PROFILE || 'driving'
 };
 
 export function resetAppState() {

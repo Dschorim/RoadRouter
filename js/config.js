@@ -14,6 +14,9 @@ const CONFIG = {
 
     // Elevation data source: 'tiff' uses the elevation.js module (which now calls our API)
     ELEVATION_SOURCE: 'tiff',
+    
+    // Default routing profile
+    DEFAULT_PROFILE: 'driving',
 };
 
 export default CONFIG;
