@@ -1,5 +1,97 @@
 // autocomplete.js - modularized autocomplete helpers
 import CONFIG from '../config.js';
+import { AUTH } from './auth.js';
+import { APP } from './state.js';
+
+function getDistanceKm(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+function getReferencePoint() {
+    const start = APP.routePoints.find(p => p.type === 'start' && p.lat !== null);
+    if (start) return { lat: start.lat, lng: start.lng };
+    
+    const validPoints = APP.routePoints.filter(p => p.lat !== null && p.lng !== null);
+    if (validPoints.length > 0) {
+        const last = validPoints[validPoints.length - 1];
+        return { lat: last.lat, lng: last.lng };
+    }
+    
+    return null;
+}
+
+function sortByDistance(results, refPoint) {
+    if (!refPoint) return results;
+    
+    return results.map(r => {
+        let lat, lon;
+        if (r.lat !== undefined && r.lon !== undefined) {
+            lat = r.lat; lon = r.lon;
+        } else if (r.geometry?.coordinates) {
+            lon = r.geometry.coordinates[0]; lat = r.geometry.coordinates[1];
+        } else if (r.properties?.lat && r.properties?.lon) {
+            lat = r.properties.lat; lon = r.properties.lon;
+        }
+        
+        const dist = (lat && lon) ? getDistanceKm(refPoint.lat, refPoint.lng, lat, lon) : Infinity;
+        return { ...r, _distance: dist };
+    }).sort((a, b) => a._distance - b._distance);
+}
+
+function scoreResult(result, queryTokens) {
+    const props = result.properties || {};
+    const street = (props.street || props.road || props.name || '').toLowerCase();
+    const city = (props.city || props.town || props.village || '').toLowerCase();
+    const lastToken = queryTokens[queryTokens.length - 1]?.toLowerCase() || '';
+    
+    if (!lastToken) return 0;
+    
+    // Single token: prioritize street matches
+    if (queryTokens.length === 1) {
+        if (street.startsWith(lastToken)) return 100;
+        if (street.includes(' ' + lastToken)) return 80;
+        if (street.includes(lastToken)) return 50;
+        if (city.startsWith(lastToken)) return 30;
+        if (city.includes(lastToken)) return 10;
+        return 0;
+    }
+    
+    // Multi-token: last token is likely city
+    if (city.startsWith(lastToken)) return 100;
+    if (city.includes(' ' + lastToken)) return 50;
+    if (city.includes(lastToken)) return 10;
+    return 0;
+}
+
+function rankResults(results, query) {
+    const tokens = query.trim().split(/\s+/);
+    
+    const seen = new Set();
+    return results
+        .map(r => ({ ...r, _score: scoreResult(r, tokens) }))
+        .sort((a, b) => {
+            if (b._score !== a._score) return b._score - a._score;
+            return (a._distance || 0) - (b._distance || 0);
+        })
+        .filter(r => {
+            let lat, lon;
+            if (r.lat !== undefined && r.lon !== undefined) {
+                lat = r.lat; lon = r.lon;
+            } else if (r.geometry?.coordinates) {
+                lon = r.geometry.coordinates[0]; lat = r.geometry.coordinates[1];
+            }
+            const key = `${lat?.toFixed(4)},${lon?.toFixed(4)}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+}
 
 export function ensureAutocompleteList() {
     let list = document.getElementById('autocomplete-list');
@@ -81,8 +173,26 @@ export function showSuggestionsForInput(inputEl, items, onSelect) {
         item.style.cssText = 'padding:10px 12px; border-bottom:1px solid var(--color-border); cursor:pointer;';
 
         const main = document.createElement('div');
-        main.style.cssText = 'font-size:13px; color:var(--color-text); font-weight:600;';
-        main.textContent = formatted.main;
+        main.style.cssText = 'font-size:13px; color:var(--color-text); font-weight:600; display:flex; align-items:center; gap:6px;';
+        
+        if (result._isHistory) {
+            const badge = document.createElement('span');
+            badge.style.cssText = 'font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700;';
+            if (result._historyType === 'top') {
+                badge.textContent = `★${result._count}`;
+                badge.style.background = 'var(--accent-orange)';
+                badge.style.color = 'var(--color-bg)';
+            } else {
+                badge.textContent = '⏱';
+                badge.style.background = 'var(--accent-blue)';
+                badge.style.color = 'var(--color-bg)';
+            }
+            main.appendChild(badge);
+        }
+        
+        const textSpan = document.createElement('span');
+        textSpan.textContent = formatted.main;
+        main.appendChild(textSpan);
 
         const sub = document.createElement('div');
         sub.style.cssText = 'font-size:12px; color:var(--color-text-secondary); margin-top:4px;';
@@ -109,6 +219,10 @@ export function showSuggestionsForInput(inputEl, items, onSelect) {
             }
 
             const display = formatted.main + (formatted.sub ? ', ' + formatted.sub : '');
+            
+            if (AUTH.isAuthenticated() && !result._isHistory) {
+                AUTH.saveSearch(display, result);
+            }
 
             if (typeof onSelect === 'function') onSelect({ display, lat, lon, dataId: inputEl.dataset.pointId, result });
             list.style.display = 'none';
@@ -153,14 +267,49 @@ export function attachAutocompleteToInput(inputEl, pointIdLabel, opts = {}) {
     inputEl.dataset.pointId = pointIdLabel === 'initial' ? 'initial' : String(pointIdLabel);
 
     let timeout = null;
+    let userLocation = null;
 
-    function doSearch(query) {
-        const photonUrl = `${CONFIG.PHOTONAPI}/api?q=${encodeURIComponent(query)}&limit=6&lang=en`;
+    if (navigator.geolocation && !getReferencePoint()) {
+        navigator.geolocation.getCurrentPosition(
+            pos => { userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude }; },
+            () => {}
+        );
+    }
+
+    async function doSearch(query) {
+        const photonUrl = `${CONFIG.PHOTONAPI}/api?q=${encodeURIComponent(query)}&limit=100&lang=en`;
+        
+        let historyResults = [];
+        if (AUTH.isAuthenticated()) {
+            const [top, recent] = await Promise.all([
+                AUTH.getTopSearches(),
+                AUTH.getRecentSearches()
+            ]);
+            
+            const lowerQuery = query.toLowerCase();
+            const topMatches = top.filter(h => h.query.toLowerCase().includes(lowerQuery)).slice(0, 3);
+            const recentMatches = recent.filter(h => h.query.toLowerCase().includes(lowerQuery) && !topMatches.find(t => t.id === h.id)).slice(0, 2);
+            
+            historyResults = [...topMatches.map(h => ({ ...h.result_data, _isHistory: true, _historyType: 'top', _count: h.search_count })), 
+                             ...recentMatches.map(h => ({ ...h.result_data, _isHistory: true, _historyType: 'recent' }))];
+        }
+        
         fetch(photonUrl)
             .then(r => r.json())
             .then(geo => {
-                if (geo && Array.isArray(geo.features) && geo.features.length > 0) {
-                    showSuggestionsForInput(inputEl, geo.features, opts.onSelect);
+                let photonResults = (geo && Array.isArray(geo.features)) ? geo.features : [];
+                
+                const refPoint = getReferencePoint() || userLocation;
+                if (refPoint) {
+                    photonResults = sortByDistance(photonResults, refPoint);
+                }
+                
+                photonResults = rankResults(photonResults, query).slice(0, 8);
+                
+                const combined = [...historyResults, ...photonResults];
+                
+                if (combined.length > 0) {
+                    showSuggestionsForInput(inputEl, combined, opts.onSelect);
                 } else {
                     const l = ensureAutocompleteList();
                     l.style.display = 'none';
@@ -168,8 +317,12 @@ export function attachAutocompleteToInput(inputEl, pointIdLabel, opts = {}) {
             })
             .catch(err => {
                 console.error('Autocomplete search failed:', err);
-                const l = ensureAutocompleteList();
-                l.style.display = 'none';
+                if (historyResults.length > 0) {
+                    showSuggestionsForInput(inputEl, historyResults, opts.onSelect);
+                } else {
+                    const l = ensureAutocompleteList();
+                    l.style.display = 'none';
+                }
             });
     }
 

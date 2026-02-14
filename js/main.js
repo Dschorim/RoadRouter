@@ -1123,6 +1123,38 @@ function setupAuthUI() {
         });
     }
 
+    // Search History Reset Listeners
+    const clearTopSearchesBtn = document.getElementById('clearTopSearchesBtn');
+    const clearRecentSearchesBtn = document.getElementById('clearRecentSearchesBtn');
+
+    if (clearTopSearchesBtn) {
+        clearTopSearchesBtn.addEventListener('click', async () => {
+            const confirmed = await UI_MODAL.confirm('Clear Top Searches', 'Clear your most searched locations?', 'Clear', 'Cancel');
+            if (!confirmed) return;
+
+            try {
+                await AUTH.clearTopSearches();
+                await UI_MODAL.alert('Success', 'Top searches cleared');
+            } catch (err) {
+                await UI_MODAL.alert('Error', err.message);
+            }
+        });
+    }
+
+    if (clearRecentSearchesBtn) {
+        clearRecentSearchesBtn.addEventListener('click', async () => {
+            const confirmed = await UI_MODAL.confirm('Clear Recent Searches', 'Clear your recent search history?', 'Clear', 'Cancel');
+            if (!confirmed) return;
+
+            try {
+                await AUTH.clearRecentSearches();
+                await UI_MODAL.alert('Success', 'Recent searches cleared');
+            } catch (err) {
+                await UI_MODAL.alert('Error', err.message);
+            }
+        });
+    }
+
     // Initial UI state
     updateUIForAuth(AUTH.user);
 

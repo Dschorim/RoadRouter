@@ -392,5 +392,64 @@ export const AUTH = {
             throw new Error(error || 'Failed to upload route');
         }
         return true;
+    },
+
+    async saveSearch(query, result) {
+        if (!this.isAuthenticated()) return;
+
+        await fetch('/api/user/search-history', {
+            method: 'POST',
+            headers: {
+                ...this.getAuthHeader(),
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ query, result })
+        }).catch(() => {});
+    },
+
+    async getTopSearches() {
+        if (!this.isAuthenticated()) return [];
+
+        const response = await fetch('/api/user/search-history/top', {
+            headers: this.getAuthHeader()
+        });
+
+        if (!response.ok) return [];
+        return await response.json();
+    },
+
+    async getRecentSearches() {
+        if (!this.isAuthenticated()) return [];
+
+        const response = await fetch('/api/user/search-history/recent', {
+            headers: this.getAuthHeader()
+        });
+
+        if (!response.ok) return [];
+        return await response.json();
+    },
+
+    async clearTopSearches() {
+        if (!this.isAuthenticated()) throw new Error('Not authenticated');
+
+        const response = await fetch('/api/user/search-history/top', {
+            method: 'DELETE',
+            headers: this.getAuthHeader()
+        });
+
+        if (!response.ok) throw new Error('Failed to clear search history');
+        return true;
+    },
+
+    async clearRecentSearches() {
+        if (!this.isAuthenticated()) throw new Error('Not authenticated');
+
+        const response = await fetch('/api/user/search-history/recent', {
+            method: 'DELETE',
+            headers: this.getAuthHeader()
+        });
+
+        if (!response.ok) throw new Error('Failed to clear search history');
+        return true;
     }
 };
