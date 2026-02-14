@@ -30,6 +30,7 @@ export const APP = {
     elevationData: null,
     activeRouteId: null,
     activeRouteName: null,
+    lastActiveTab: null,
     availableProfiles: [],
     selectedProfile: CONFIG.DEFAULT_PROFILE || 'driving'
 };

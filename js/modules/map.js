@@ -32,9 +32,11 @@ export function initializeMap() {
     if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition((pos) => {
             const { latitude, longitude } = pos.coords;
-            APP.map.setView([latitude, longitude], 12);
+            if (APP.map) {
+                APP.map.setView([latitude, longitude], 12);
+            }
         }, (error) => {
-            console.log('Geolocation denied or failed:', error.message);
+            // Geolocation denied or unavailable
         });
     }
 

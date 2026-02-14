@@ -300,6 +300,7 @@
 }
 
 .security-card h4 {
+    margin-top: 0;
     margin-bottom: 16px;
     color: var(--color-text);
 }

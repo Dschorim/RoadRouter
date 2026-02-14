@@ -8,9 +8,8 @@ let debugTileLayer = null;
 let speedStats = { min: Infinity, max: 0, speeds: [] };
 let debugLegendControl = null;
 let isDarkModeActive = false; // Track dark mode state
-let debugTooltip = null; // Tooltip element for speed display
-let mapHoverHandler = null; // Map-level hover handler
-let osmDataCache = new Map(); // Cache for OSM data lookups
+let debugTooltip = null;
+let mapHoverHandler = null;
 
 // Callback to update route style in main app
 let _updateRouteStyleCallback = null;
@@ -355,7 +354,6 @@ function removeDebugVisualization() {
         mapHoverHandler = null;
     }
     hideDebugTooltip();
-    osmDataCache.clear();
     speedStats = { min: Infinity, max: 0, speeds: [] };
 }
 
@@ -423,33 +421,6 @@ function distanceToSegment(px, py, x1, y1, x2, y2) {
     const nearY = y1 + t * dy;
 
     return Math.sqrt((px - nearX) ** 2 + (py - nearY) ** 2);
-}
-
-async function fetchOSMData(lat, lng) {
-    const cacheKey = `${lat.toFixed(5)},${lng.toFixed(5)}`;
-    if (osmDataCache.has(cacheKey)) {
-        return osmDataCache.get(cacheKey);
-    }
-
-    try {
-        const query = `[out:json];way(around:10,${lat},${lng})["highway"];out tags;`;
-        const response = await fetch(`https://overpass.private.coffee/api/interpreter?data=${encodeURIComponent(query)}`);
-        const data = await response.json();
-        
-        const osmData = {};
-        if (data.elements && data.elements.length > 0) {
-            const way = data.elements[0];
-            osmData.highway = way.tags?.highway || null;
-            osmData.surface = way.tags?.surface || null;
-            osmData.smoothness = way.tags?.smoothness || null;
-            osmData.tracktype = way.tags?.tracktype || null;
-        }
-        
-        osmDataCache.set(cacheKey, osmData);
-        return osmData;
-    } catch (e) {
-        return {};
-    }
 }
 
 function showDebugTooltip(x, y, speed) {

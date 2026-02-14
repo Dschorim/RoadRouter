@@ -118,11 +118,4 @@ async function getElevations(points) {
     }
 }
 
-/**
- * Preload function - no longer needed with API, kept for compatibility
- */
-async function preloadAll() {
-    // No-op with API backend
-}
-
-export { initialize, getElevation, getElevations, preloadAll };
+export { initialize, getElevation, getElevations };

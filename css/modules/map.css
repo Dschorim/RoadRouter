@@ -235,3 +235,7 @@
     background: var(--color-surface-light) !important;
     color: var(--color-primary) !important;
 }
+
+.leaflet-control-attribution {
+    margin-right: 25px !important;
+}

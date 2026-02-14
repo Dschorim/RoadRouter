@@ -7,7 +7,7 @@ import * as UI from './modules/ui.js';
 import { attachAutocompleteToInput } from './modules/autocomplete.js';
 import { reverseGeocode } from './geocoding.js';
 import { formatDistance, formatDuration } from './utils.js';
-import { initialize as initElevation, getElevations } from './elevation.js';
+import { getElevations } from './elevation.js';
 import { fetchAndRenderElevation, renderElevationProfile } from './modules/elevation_renderer.js';
 import { generateElevationThumbnail } from './modules/elevation_thumbnail.js';
 import { AUTH } from './modules/auth.js';
@@ -26,6 +26,8 @@ document.addEventListener('DOMContentLoaded', () => {
     AUTH.init();
     setupAuthUI();
 
+
+
     // Attach Global Functions for HTML Buttons
     window.addNewWaypoint = UI.addNewWaypoint;
     window.removePoint = UI.removePoint;
@@ -34,6 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.generateGPX = generateGPX;
     window.importGPX = importGPX;
     window.exportGPX = exportGPX;
+    window.useCurrentLocation = useCurrentLocation;
 
     // Setup Debug Callback
     setUpdateRouteStyleCallback(updateRouteStyle);
@@ -52,10 +55,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (initialInput) {
         UI.attachAutocompleteToInput(initialInput, 'initial', {
             onSelect: ({ display, lat, lon }) => {
+                // First search sets destination (last point)
                 if (APP.routePoints.length > 0) {
-                    APP.routePoints[0].lat = lat;
-                    APP.routePoints[0].lng = lon;
-                    APP.routePoints[0].address = display;
+                    const lastPoint = APP.routePoints[APP.routePoints.length - 1];
+                    lastPoint.lat = lat;
+                    lastPoint.lng = lon;
+                    lastPoint.address = display;
                 }
 
                 initialInput.value = display;
@@ -1370,6 +1375,42 @@ async function startNewRoute() {
     updateSaveButton(); // updates export button
 }
 
+function useCurrentLocation() {
+    if (!navigator.geolocation) {
+        alert('Geolocation is not supported by your browser');
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            const { latitude, longitude } = position.coords;
+            const startPoint = APP.routePoints.find(p => p.type === 'start');
+            if (startPoint) {
+                startPoint.lat = latitude;
+                startPoint.lng = longitude;
+                startPoint.address = 'Locating...';
+                
+                UI.renderRoutePoints();
+                UI.updateMapMarkers();
+                
+                if (APP.map) {
+                    APP.map.setView([latitude, longitude], 14, { animate: true });
+                }
+                
+                reverseGeocode(latitude, longitude).then((address) => {
+                    startPoint.address = address;
+                    UI.renderRoutePoints();
+                });
+                
+                debouncedCalculateRoute();
+            }
+        },
+        (error) => {
+            alert('Unable to retrieve your location: ' + error.message);
+        }
+    );
+}
+
 function updateSaveButton() {
     const saveRouteBtn = document.getElementById('saveRouteBtn');
     if (saveRouteBtn && AUTH.isAuthenticated()) {
@@ -1677,3 +1718,4 @@ window.uploadRouteToDevice = async function(routeId) {
         btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="5" y1="18" x2="19" y2="18"></line><line x1="12" y1="18" x2="12" y2="22"></line></svg>';
     }
 };
+

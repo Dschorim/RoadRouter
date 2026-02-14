@@ -292,6 +292,38 @@
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.address-input-wrapper {
+    position: relative;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    padding-right: 32px;
+}
+
+.btn-location {
+    position: absolute;
+    right: 0;
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 6px;
+    font-size: 16px;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn-location:hover {
+    background: rgba(50, 184, 198, 0.1);
+}
+
+.btn-location:hover svg {
+    stroke: var(--color-primary);
+}
+
 #routeInfo {
     padding: 12px;
     background: rgba(50, 184, 198, 0.08);

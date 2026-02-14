@@ -62,17 +62,36 @@ document.addEventListener('click', (e) => {
 window.removePoint = removePoint;
 
 export function removePoint(id) {
+    const removedPoint = APP.routePoints.find(p => p.id === id);
     APP.routePoints = APP.routePoints.filter(p => p.id !== id);
+    
     if (APP.routePoints.length === 1) {
-        APP.routePoints.push({
-            id: APP.nextPointId++,
-            lat: null,
-            lng: null,
-            address: '',
-            type: 'dest'
-        });
+        const remaining = APP.routePoints[0];
+        // If we removed the start, remaining point stays as destination
+        // If we removed the destination, remaining point stays as start
+        if (removedPoint.type === 'start') {
+            remaining.type = 'dest';
+            APP.routePoints.unshift({
+                id: APP.nextPointId++,
+                lat: null,
+                lng: null,
+                address: '',
+                type: 'start'
+            });
+        } else {
+            remaining.type = 'start';
+            APP.routePoints.push({
+                id: APP.nextPointId++,
+                lat: null,
+                lng: null,
+                address: '',
+                type: 'dest'
+            });
+        }
+    } else {
+        updatePointTypes();
     }
-    updatePointTypes();
+    
     renderRoutePoints();
     updateMapMarkers();
     if (_calculateRoute) _calculateRoute();
@@ -149,6 +168,7 @@ export function renderRoutePoints() {
         }
 
         const placeholder = point.type === 'start' ? 'Start Point' : point.type === 'dest' ? 'Destination' : 'Waypoint';
+        const locationBtn = (point.type === 'start' && point.lat === null) ? '<button class="btn-location" onclick="useCurrentLocation()" title="Use current location"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" stroke-width="2"><circle cx="12" cy="12" r="8"></circle><line x1="12" y1="2" x2="12" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line></svg></button>' : '';
 
         const div = document.createElement('div');
         div.className = 'route-point-item';
@@ -160,6 +180,7 @@ export function renderRoutePoints() {
             <div class="point-type-badge ${badgeClass}">${label}</div>
             <div class="address-input-wrapper">
                 <input type="text" id="input-${point.id}" value="${point.address}" placeholder="${placeholder}">
+                ${locationBtn}
             </div>
             <button class="btn-danger" onclick="removePoint(${point.id})">✕</button>
         `;
@@ -284,6 +305,86 @@ export function renderRoutePoints() {
         div.addEventListener('dragend', () => {
             APP.draggedElement = null;
             document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
+        });
+
+        // Touch support for mobile
+        let touchStartY = 0;
+        let touchElement = null;
+        
+        div.addEventListener('touchstart', (e) => {
+            if (!e.target.closest('.btn-drag')) return;
+            touchStartY = e.touches[0].clientY;
+            touchElement = div;
+            div.style.opacity = '0.5';
+        });
+        
+        div.addEventListener('touchmove', (e) => {
+            if (!touchElement) return;
+            e.preventDefault();
+            const touch = e.touches[0];
+            const elements = document.elementsFromPoint(touch.clientX, touch.clientY);
+            const targetItem = elements.find(el => el.classList.contains('route-point-item') && el !== touchElement);
+            
+            document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
+            
+            if (targetItem) {
+                const rect = targetItem.getBoundingClientRect();
+                const midpoint = rect.top + rect.height / 2;
+                const isTopHalf = touch.clientY < midpoint;
+                
+                const indicator = document.createElement('div');
+                indicator.className = 'drop-indicator-line';
+                indicator.style.cssText = 'position:absolute;left:0;right:0;height:2px;background:#32b8c6;pointer-events:none;z-index:100;';
+                
+                const container = targetItem.parentElement;
+                if (isTopHalf) {
+                    indicator.style.top = (targetItem.offsetTop - 5) + 'px';
+                } else {
+                    indicator.style.top = (targetItem.offsetTop + targetItem.offsetHeight + 3) + 'px';
+                }
+                
+                container.style.position = 'relative';
+                container.appendChild(indicator);
+                targetItem.dataset.dropBefore = isTopHalf ? 'true' : 'false';
+            }
+        });
+        
+        div.addEventListener('touchend', (e) => {
+            if (!touchElement) return;
+            div.style.opacity = '1';
+            
+            const touch = e.changedTouches[0];
+            const elements = document.elementsFromPoint(touch.clientX, touch.clientY);
+            const targetItem = elements.find(el => el.classList.contains('route-point-item') && el !== touchElement);
+            
+            document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
+            
+            if (targetItem) {
+                const fromIndex = APP.routePoints.findIndex(p => p.id == touchElement.dataset.id);
+                const toIndex = APP.routePoints.findIndex(p => p.id == targetItem.dataset.id);
+                const dropBefore = targetItem.dataset.dropBefore === 'true';
+                
+                if (fromIndex !== -1 && toIndex !== -1) {
+                    const [removed] = APP.routePoints.splice(fromIndex, 1);
+                    let insertIndex = toIndex;
+                    if (fromIndex < toIndex && !dropBefore) {
+                    } else if (fromIndex < toIndex && dropBefore) {
+                        insertIndex = toIndex - 1;
+                    } else if (fromIndex > toIndex && !dropBefore) {
+                        insertIndex = toIndex + 1;
+                    }
+                    
+                    APP.routePoints.splice(insertIndex, 0, removed);
+                    updatePointTypes();
+                    renderRoutePoints();
+                    updateMapMarkers();
+                    if (_calculateRoute) _calculateRoute();
+                }
+                
+                delete targetItem.dataset.dropBefore;
+            }
+            
+            touchElement = null;
         });
     });
 }
@@ -425,18 +526,19 @@ export function handleMapClick(latlng) {
     const startPoint = APP.routePoints.find(p => p.type === 'start');
     const destPoint = APP.routePoints.find(p => p.type === 'dest');
 
-    if (!startPoint || startPoint.lat === null) {
-        APP.routePoints[0].lat = lat;
-        APP.routePoints[0].lng = lng;
-        APP.routePoints[0].address = 'Locating...';
-        finishMapClickAction(lat, lng, APP.routePoints[0]);
-        showRouteContent();
-    } else if (!destPoint || destPoint.lat === null) {
+    // First click sets destination, second sets start
+    if (!destPoint || destPoint.lat === null) {
         const p = APP.routePoints[APP.routePoints.length - 1];
         p.lat = lat;
         p.lng = lng;
         p.address = 'Locating...';
         finishMapClickAction(lat, lng, p);
+        showRouteContent();
+    } else if (!startPoint || startPoint.lat === null) {
+        APP.routePoints[0].lat = lat;
+        APP.routePoints[0].lng = lng;
+        APP.routePoints[0].address = 'Locating...';
+        finishMapClickAction(lat, lng, APP.routePoints[0]);
     } else {
         destPoint.type = 'waypoint';
         const newDest = {
