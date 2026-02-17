@@ -2,6 +2,8 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    margin: 0 0 16px 0 !important;
+    padding: 0;
 }
 
 .form-group label {
@@ -10,6 +12,11 @@
     color: var(--color-text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.8px;
+    line-height: 1.5;
+    /* Added to stabilize height */
+    margin-bottom: 4px;
+    /* Added for consistency */
+    display: block;
 }
 
 .search-input-wrapper {
@@ -372,4 +379,185 @@
     background: rgba(50, 184, 198, 0.15);
     color: var(--color-primary);
     box-shadow: 0 0 8px rgba(50, 184, 198, 0.3);
+}
+
+/* Amenity Settings & Search UI Refinement */
+.amenity-settings-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 20px;
+}
+
+.amenity-setting-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    cursor: grab;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    gap: 16px;
+}
+
+.amenity-setting-item:hover {
+    border-color: var(--color-primary);
+    background: rgba(50, 184, 198, 0.08);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.amenity-setting-item.sortable-ghost {
+    opacity: 0.4;
+    background: var(--color-primary);
+}
+
+.amenity-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+}
+
+.amenity-label {
+    font-size: 14px;
+    font-weight: 500;
+}
+
+/* Toggle Switch */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--color-border);
+    transition: .4s;
+    border-radius: 34px;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 50%;
+}
+
+input:checked+.slider {
+    background-color: var(--color-primary);
+}
+
+input:checked+.slider:before {
+    transform: translateX(18px);
+}
+
+/* Dropdown Container Refinement */
+.dropdown-container {
+    position: relative;
+    display: inline-block;
+}
+
+/* Amenity Selection List (In-place) */
+.amenity-selection-list {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-top: 0px;
+    min-height: 100px;
+    /* Prevent collapse if empty */
+}
+
+.amenity-selection-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.amenity-selection-item:hover {
+    background: rgba(50, 184, 198, 0.1);
+    border-color: var(--color-primary);
+    transform: translateY(-2px);
+}
+
+.amenity-selection-item svg {
+    opacity: 0.8;
+    color: var(--color-primary);
+}
+
+.amenity-selection-item span {
+    font-size: 13px;
+    font-weight: 500;
+}
+
+/* Waypoint-style Amenity Marker */
+.amenity-marker {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #00bcd4 0%, #00acc1 100%);
+    box-shadow: 0 4px 10px rgba(0, 188, 212, 0.3);
+    color: #fff;
+    z-index: 1000 !important;
+}
+
+.non-essential-marker {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #9c27b0 0%, #7b1fa2 100%);
+    /* Purple theme */
+    box-shadow: 0 4px 10px rgba(156, 39, 176, 0.3);
+    color: #fff;
+    z-index: 1001 !important;
+}
+
+.amenity-marker svg,
+.non-essential-marker svg {
+    width: 16px;
+    height: 16px;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.2));
+}
+
+/* Fix persistent layout jump */
+#initialSearch .search-input-wrapper {
+    margin-top: 12px;
+}
+
+/* Remove old highlight style */
+.amenity-highlight {
+    display: none;
 }

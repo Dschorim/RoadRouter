@@ -15,6 +15,10 @@ export function setUICallbacks(calcRoute, throttledPreview) {
     _throttledPreview = throttledPreview;
 }
 
+export function triggerRouteCalculation() {
+    if (_calculateRoute) _calculateRoute();
+}
+
 export function showRouteContent() {
     document.getElementById('initialSearch').style.display = 'none';
     document.getElementById('routeContent').style.display = 'block';
@@ -26,11 +30,13 @@ export function hideRouteContent() {
 }
 
 export function updatePointTypes() {
-    if (APP.routePoints.length === 0) return;
-    APP.routePoints.forEach((point, index) => {
+    const routePoints = APP.routePoints.filter(p => p.type !== 'non-essential');
+    if (routePoints.length === 0) return;
+
+    routePoints.forEach((point, index) => {
         if (index === 0) {
             point.type = 'start';
-        } else if (index === APP.routePoints.length - 1 && APP.routePoints.length > 1) {
+        } else if (index === routePoints.length - 1 && routePoints.length > 1) {
             point.type = 'dest';
         } else {
             point.type = 'waypoint';
@@ -76,12 +82,20 @@ window.removePoint = removePoint;
 export function removePoint(id) {
     if (APP.lastFocusedInputId === id) APP.lastFocusedInputId = null;
     const removedPoint = APP.routePoints.find(p => p.id === id);
+    if (!removedPoint) return;
+
     APP.routePoints = APP.routePoints.filter(p => p.id !== id);
+
+    // If it was a non-essential point, just refresh and exit
+    if (removedPoint.type === 'non-essential') {
+        renderRoutePoints();
+        updateMapMarkers();
+        closeAllMenus();
+        return;
+    }
 
     if (APP.routePoints.length === 1) {
         const remaining = APP.routePoints[0];
-        // If we removed the start, remaining point stays as destination
-        // If we removed the destination, remaining point stays as start
         if (removedPoint.type === 'start') {
             remaining.type = 'dest';
             APP.routePoints.unshift({
@@ -167,7 +181,9 @@ export function renderRoutePoints() {
     if (!container) return;
     container.innerHTML = '';
 
-    APP.routePoints.forEach((point, index) => {
+    const routePoints = APP.routePoints.filter(p => p.type !== 'non-essential');
+
+    routePoints.forEach((point, index) => {
         let label, badgeClass;
         if (point.type === 'start') {
             label = 'A';
@@ -427,74 +443,85 @@ export function updateMapMarkers() {
         } else if (point.type === 'dest') {
             label = 'B';
             type = 'dest';
+        } else if (point.type === 'non-essential') {
+            label = ''; // No label for non-essential? Or icon?
+            type = 'non-essential';
         } else {
-            label = index.toString();
+            // Recalculate index for display manually since we filtered non-essentials in the list
+            const routePoints = APP.routePoints.filter(p => p.type !== 'non-essential');
+            const routeIndex = routePoints.indexOf(point);
+            label = routeIndex > 0 ? routeIndex.toString() : '';
             type = 'waypoint';
         }
 
         const icon = L.divIcon({
-            html: `<div class="map-pin ${type}">${label}</div>`,
+            html: point.type === 'non-essential' ? `
+                <div class="non-essential-marker">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        ${window.AMENITY_ICONS && point.amenityType ? (window.AMENITY_ICONS[point.amenityType] || window.AMENITY_ICONS._default) : '<circle cx="12" cy="12" r="3"></circle>'}
+                    </svg>
+                </div>
+            ` : `<div class="map-pin ${type}">${label}</div>`,
             className: 'leaflet-div-icon',
-            iconSize: [24, 24],
-            iconAnchor: [12, 12]
+            iconSize: [28, 28],
+            iconAnchor: [14, 14]
         });
 
         const marker = L.marker([point.lat, point.lng], { icon, draggable: true })
             .addTo(APP.markerLayer);
 
-        // Custom Overlay for Marker Menu (instead of Leaflet popup)
-        marker.on('click', (e) => {
-            L.DomEvent.stopPropagation(e);
-            closeAllMenus();
+        if (point.type === 'non-essential') {
+            marker.bindPopup(`<strong>${point.address}</strong><br><small>Non-essential</small><br><button class="btn-outline" style="padding:2px 6px; font-size:10px; margin-top:5px;" onclick="removePoint(${point.id})">Remove</button>`);
+        } else {
+            // Custom Overlay for Marker Menu (only for routing points)
+            marker.on('click', (e) => {
+                L.DomEvent.stopPropagation(e);
+                closeAllMenus();
 
-            const mapContainer = APP.map.getContainer();
-            const pointPx = APP.map.latLngToContainerPoint([point.lat, point.lng]);
+                const mapContainer = APP.map.getContainer();
+                const pointPx = APP.map.latLngToContainerPoint([point.lat, point.lng]);
 
-            const menu = document.createElement('div');
-            menu.className = 'custom-menu-overlay';
-            // Center horizontally above point
-            menu.style.left = pointPx.x + 'px';
-            menu.style.top = pointPx.y + 'px';
+                const menu = document.createElement('div');
+                menu.className = 'custom-menu-overlay';
+                menu.style.left = pointPx.x + 'px';
+                menu.style.top = pointPx.y + 'px';
 
-            // Modern, dark-mode compatible menu content
-            const addr = point.address || 'Locating...';
+                const addr = point.address || 'Locating...';
+                const trashIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
 
-            // SVG Icons
-            const trashIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
-
-            menu.innerHTML = `
-                <div class="menu-content">
-                    <div class="menu-header">
-                        <div class="menu-title">${addr}</div>
-                        <div class="menu-coords">${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}</div>
+                menu.innerHTML = `
+                    <div class="menu-content">
+                        <div class="menu-header">
+                            <div class="menu-title">${addr}</div>
+                            <div class="menu-coords">${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}</div>
+                        </div>
+                        <div class="menu-divider"></div>
+                        <button class="menu-item danger" onclick="removePoint(${point.id})">
+                            ${trashIcon}
+                            <span>Remove Point</span>
+                        </button>
                     </div>
-                    <div class="menu-divider"></div>
-                    <button class="menu-item danger" onclick="removePoint(${point.id})">
-                        ${trashIcon}
-                        <span>Remove Point</span>
-                    </button>
-                </div>
-            `;
+                `;
 
-            mapContainer.appendChild(menu);
+                mapContainer.appendChild(menu);
 
-            const removeBtn = menu.querySelector('.menu-item.danger');
-            if (removeBtn) {
-                removeBtn.onclick = (e) => {
-                    L.DomEvent.stopPropagation(e);
-                    removePoint(point.id);
-                };
-            }
+                const removeBtn = menu.querySelector('.menu-item.danger');
+                if (removeBtn) {
+                    removeBtn.onclick = (e) => {
+                        L.DomEvent.stopPropagation(e);
+                        removePoint(point.id);
+                    };
+                }
 
-            // If address is "Locating...", try to refresh it
-            if (addr === 'Locating...') {
-                reverseGeocode(point.lat, point.lng).then(res => {
-                    point.address = res;
-                    const title = menu.querySelector('.menu-title');
-                    if (title) title.textContent = res;
-                });
-            }
-        });
+                if (addr === 'Locating...') {
+                    reverseGeocode(point.lat, point.lng).then(res => {
+                        point.address = res;
+                        const title = menu.querySelector('.menu-title');
+                        if (title) title.textContent = res;
+                    });
+                }
+            });
+        }
 
         APP.mapMarkers[point.id] = marker;
 

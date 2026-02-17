@@ -150,8 +150,6 @@ export async function fetchOSMData(coordinates) {
     const missingTiles = Array.from(requiredTiles).filter(key => !fetchedTiles.has(key));
 
     if (missingTiles.length > 0) {
-        console.log(`Fetching ${missingTiles.length} new OSM tiles...`);
-
         // Fetch missing tiles in batches to avoid overwhelming the server
         const BATCH_SIZE = 4;
         for (let i = 0; i < missingTiles.length; i += BATCH_SIZE) {
@@ -210,6 +208,72 @@ async function fetchTileData(tileKey) {
         console.error(`Failed to fetch OSM tile ${tileKey}:`, error);
         return { elements: [] };
     }
+}
+
+export async function fetchAmenitiesInBounds(bounds, type) {
+    if (!bounds || !type) return { elements: [] };
+
+    // 1. Identify all tiles covering the bounds
+    const requiredTiles = new Set();
+    const minLat = bounds.getSouth();
+    const maxLat = bounds.getNorth();
+    const minLng = bounds.getWest();
+    const maxLng = bounds.getEast();
+
+    for (let lat = minLat; lat <= maxLat + TILE_SIZE; lat += TILE_SIZE) {
+        for (let lng = minLng; lng <= maxLng + TILE_SIZE; lng += TILE_SIZE) {
+            requiredTiles.add(getTileKey(lat, lng));
+        }
+    }
+
+    // 2. Ensure tiles are fetched
+    const missingTiles = Array.from(requiredTiles).filter(key => !fetchedTiles.has(key));
+
+    if (missingTiles.length > 0) {
+        const BATCH_SIZE = 4;
+        for (let i = 0; i < missingTiles.length; i += BATCH_SIZE) {
+            const batch = missingTiles.slice(i, i + BATCH_SIZE);
+            const promises = batch.map(key => fetchTileData(key));
+            const results = await Promise.all(promises);
+
+            results.forEach((data, index) => {
+                const key = batch[index];
+                if (data && data.elements) {
+                    data.elements.forEach(el => {
+                        const compKey = `${el.id}_${el.lat1.toFixed(6)}_${el.lon1.toFixed(6)}_${el.lat2.toFixed(6)}_${el.lon2.toFixed(6)}`;
+                        globalOsmElements.set(compKey, el);
+                    });
+                    fetchedTiles.add(key);
+                }
+            });
+        }
+    }
+
+    // 3. Filter global pool for amenities of specific type in current view
+    const relevantElements = [];
+
+    for (const el of globalOsmElements.values()) {
+        const midLat = (el.lat1 + el.lat2) / 2;
+        const midLon = (el.lon1 + el.lon2) / 2;
+
+        if (midLat >= minLat && midLat <= maxLat && midLon >= minLng && midLon <= maxLng) {
+            // Check if it matches the amenity type
+            // The backend returns all tags in el.tags
+            if (el.tags && (
+                el.tags.amenity === type ||
+                el.tags.leisure === type ||
+                el.tags.shop === type ||
+                el.tags.tourism === type ||
+                el.tags.craft === type ||
+                el.tags.office === type ||
+                el.tags.man_made === type
+            )) {
+                relevantElements.push(el);
+            }
+        }
+    }
+
+    return { elements: relevantElements };
 }
 
 function pointToSegmentDistance(plat, plon, lat1, lon1, lat2, lon2) {

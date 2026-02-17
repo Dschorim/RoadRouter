@@ -32,7 +32,12 @@ export const APP = {
     activeRouteName: null,
     lastActiveTab: null,
     availableProfiles: [],
-    selectedProfile: CONFIG.DEFAULT_PROFILE || 'driving'
+    selectedProfile: CONFIG.DEFAULT_PROFILE || 'driving',
+    amenityHighlightLayer: null,
+    amenitySettings: JSON.parse(localStorage.getItem('amenitySettings')) || {
+        enabled: ['drinking_water', 'toilets', 'bicycle_repair_station', 'shelter'],
+        disabled: ['water_point']
+    }
 };
 
 export function resetAppState() {

@@ -13,6 +13,7 @@ import { generateElevationThumbnail } from './modules/elevation_thumbnail.js';
 import { fetchOSMData } from './osm_data.js';
 import { AUTH } from './modules/auth.js';
 import { UI_MODAL } from './modules/ui_modals.js';
+import { initAmenitySearch } from './modules/amenity_search.js';
 
 // ==================== INITIALIZATION ====================
 
@@ -26,6 +27,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize Auth
     AUTH.init();
     setupAuthUI();
+
+    // Initialize Amenity Search
+    initAmenitySearch();
 
 
 
@@ -237,7 +241,7 @@ function throttledPreviewRouteCalculation() {
 }
 
 async function calculateRoute() {
-    const validPoints = APP.routePoints.filter(p => p.lat !== null && p.lng !== null);
+    const validPoints = APP.routePoints.filter(p => p.lat !== null && p.lng !== null && p.type !== 'non-essential');
 
     if (validPoints.length < 2) {
         APP.routeLayer.clearLayers();
