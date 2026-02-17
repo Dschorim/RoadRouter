@@ -94,14 +94,26 @@ const HIGHWAY_PRIORITY = {
 };
 
 // Cache for OSM data
-const osmCache = new Map();
+const TILE_SIZE = 0.02; // ~2.2km grid
+const fetchedTiles = new Set();
+const globalOsmElements = new Map();
+
+function getTileKey(lat, lng) {
+    return `${Math.floor(lat / TILE_SIZE)},${Math.floor(lng / TILE_SIZE)}`;
+}
+
+function getBBoxForTile(tileKey) {
+    const [latIdx, lngIdx] = tileKey.split(',').map(Number);
+    return {
+        minLat: latIdx * TILE_SIZE,
+        maxLat: (latIdx + 1) * TILE_SIZE,
+        minLng: lngIdx * TILE_SIZE,
+        maxLng: (lngIdx + 1) * TILE_SIZE
+    };
+}
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function getCacheKey(coords) {
-    return coords.map(c => `${c[1].toFixed(5)},${c[0].toFixed(5)}`).join('|');
 }
 
 async function fetchWithRetry(url, options, retries = MAX_RETRIES) {
@@ -109,13 +121,16 @@ async function fetchWithRetry(url, options, retries = MAX_RETRIES) {
         try {
             const response = await fetch(url, options);
             if (!response.ok) {
+                if (response.status === 429) { // Rate limited
+                    console.warn("Overpass rate limited, waiting longer...");
+                    await sleep(RETRY_DELAY * 2);
+                    continue;
+                }
                 throw new Error(`HTTP ${response.status}`);
             }
             return await response.json();
         } catch (error) {
-            if (i === retries) {
-                throw error;
-            }
+            if (i === retries) throw error;
             console.warn(`Overpass-minimal request failed (attempt ${i + 1}/${retries + 1}), retrying...`, error);
             await sleep(RETRY_DELAY);
         }
@@ -123,82 +138,76 @@ async function fetchWithRetry(url, options, retries = MAX_RETRIES) {
 }
 
 export async function fetchOSMData(coordinates) {
-    const cacheKey = getCacheKey(coordinates);
-    if (osmCache.has(cacheKey)) {
-        return osmCache.get(cacheKey);
+    if (!coordinates || coordinates.length === 0) return { elements: [] };
+
+    // 1. Identify all tiles covering the route
+    const requiredTiles = new Set();
+    coordinates.forEach(c => {
+        requiredTiles.add(getTileKey(c[1], c[0]));
+    });
+
+    // 2. Find which tiles are not yet fetched
+    const missingTiles = Array.from(requiredTiles).filter(key => !fetchedTiles.has(key));
+
+    if (missingTiles.length > 0) {
+        console.log(`Fetching ${missingTiles.length} new OSM tiles...`);
+
+        // Fetch missing tiles in batches to avoid overwhelming the server
+        const BATCH_SIZE = 4;
+        for (let i = 0; i < missingTiles.length; i += BATCH_SIZE) {
+            const batch = missingTiles.slice(i, i + BATCH_SIZE);
+            const promises = batch.map(key => fetchTileData(key));
+            const results = await Promise.all(promises);
+
+            results.forEach((data, index) => {
+                const key = batch[index];
+                if (data && data.elements) {
+                    data.elements.forEach(el => {
+                        // Use composite key for deduplication
+                        const compKey = `${el.id}_${el.lat1.toFixed(6)}_${el.lon1.toFixed(6)}_${el.lat2.toFixed(6)}_${el.lon2.toFixed(6)}`;
+                        globalOsmElements.set(compKey, el);
+                    });
+                    fetchedTiles.add(key);
+                }
+            });
+        }
     }
 
-    // Determine if we should split the route into segments
-    // Routes longer than ~8km or with many points benefit from segmenting
-    // to avoid giant radii that return too much irrelevant data or hit limits.
-    const MAX_SEGMENT_RADIUS_METERS = 5000;
-
+    // 3. Filter global pool for relevant elements
+    // We return elements that are roughly within the bounding box of the current route plus a small buffer
     const lats = coordinates.map(c => c[1]);
     const lngs = coordinates.map(c => c[0]);
-    const minLat = Math.min(...lats);
-    const maxLat = Math.max(...lats);
-    const minLng = Math.min(...lngs);
-    const maxLng = Math.max(...lngs);
+    const minLat = Math.min(...lats) - 0.005;
+    const maxLat = Math.max(...lats) + 0.005;
+    const minLng = Math.min(...lngs) - 0.005;
+    const maxLng = Math.max(...lngs) + 0.005;
 
-    const dLatDeg = maxLat - minLat;
-    const dLngDeg = maxLng - minLng;
-    const totalRadiusDeg = Math.sqrt(dLatDeg * dLatDeg + dLngDeg * dLngDeg) / 2;
-    const totalRadiusMeters = totalRadiusDeg * 111320;
-
-    if (totalRadiusMeters > MAX_SEGMENT_RADIUS_METERS && coordinates.length > 50) {
-        // Split into chunks of ~50 points with overlap
-        const CHUNK_SIZE = 100;
-        const OVERLAP = 20;
-        const results = [];
-
-        for (let i = 0; i < coordinates.length; i += (CHUNK_SIZE - OVERLAP)) {
-            const chunk = coordinates.slice(i, i + CHUNK_SIZE);
-            if (chunk.length < 5) continue;
-
-            const chunkData = await fetchSingleOSMQuery(chunk);
-            if (chunkData && chunkData.elements) {
-                results.push(...chunkData.elements);
-            }
+    const relevantElements = [];
+    for (const el of globalOsmElements.values()) {
+        const midLat = (el.lat1 + el.lat2) / 2;
+        const midLon = (el.lon1 + el.lon2) / 2;
+        if (midLat >= minLat && midLat <= maxLat && midLon >= minLng && midLon <= maxLng) {
+            relevantElements.push(el);
         }
-
-        // Deduplicate elements by ID and coordinates
-        // Since many segments share the same way ID, we must use a composite key.
-        const uniqueElements = Array.from(new Map(results.map(el => {
-            const key = `${el.id}_${el.lat1.toFixed(6)}_${el.lon1.toFixed(6)}_${el.lat2.toFixed(6)}_${el.lon2.toFixed(6)}`;
-            return [key, el];
-        })).values());
-        const data = { elements: uniqueElements };
-        osmCache.set(cacheKey, data);
-        return data;
     }
 
-    const data = await fetchSingleOSMQuery(coordinates);
-    osmCache.set(cacheKey, data);
-    return data;
+    return { elements: relevantElements };
 }
 
-async function fetchSingleOSMQuery(coordinates) {
-    const lats = coordinates.map(c => c[1]);
-    const lngs = coordinates.map(c => c[0]);
-    const minLat = Math.min(...lats);
-    const maxLat = Math.max(...lats);
-    const minLng = Math.min(...lngs);
-    const maxLng = Math.max(...lngs);
+async function fetchTileData(tileKey) {
+    const bbox = getBBoxForTile(tileKey);
+    const centerLat = (bbox.minLat + bbox.maxLat) / 2;
+    const centerLng = (bbox.minLng + bbox.maxLng) / 2;
 
-    const centerLat = (minLat + maxLat) / 2;
-    const centerLng = (minLng + maxLng) / 2;
-
-    const dLatDeg = maxLat - minLat;
-    const dLngDeg = maxLng - minLng;
-    const radiusDeg = Math.sqrt(dLatDeg * dLatDeg + dLngDeg * dLngDeg) / 2 + 0.005;
-    const radiusMeters = radiusDeg * 111320;
+    // Radius should cover the diagonal of the tile plus a small buffer
+    const radiusMeters = (TILE_SIZE * 111320) * 0.8; // Approx radius from center to corners
 
     const url = `${OVERPASS_API}?lat=${centerLat}&lon=${centerLng}&radius=${radiusMeters}`;
 
     try {
         return await fetchWithRetry(url, { method: 'GET' });
     } catch (error) {
-        console.error('Failed to fetch OSM data from overpass-minimal:', error);
+        console.error(`Failed to fetch OSM tile ${tileKey}:`, error);
         return { elements: [] };
     }
 }
@@ -228,6 +237,143 @@ function pointToSegmentDistance(plat, plon, lat1, lon1, lat2, lon2) {
     const dFinalLon = (plon - projLon) * cosLat;
 
     return Math.sqrt(dFinalLat * dFinalLat + dFinalLon * dFinalLon);
+}
+
+export async function matchOSMDataToRouteAsync(osmData, routePoints, options = {}) {
+    const {
+        batchSize = 100,
+        onProgress = null,
+        signal = null
+    } = options;
+
+    if (!osmData || !osmData.elements || osmData.elements.length === 0) {
+        return routePoints.map(() => ({ highway: 'unknown', surface: 'unknown', smoothness: 'unknown' }));
+    }
+
+    const elements = osmData.elements;
+    const GRID_SIZE = 0.01;
+    const grid = new Map();
+
+    for (const el of elements) {
+        const midLat = (el.lat1 + el.lat2) / 2;
+        const midLon = (el.lon1 + el.lon2) / 2;
+        const gx = Math.floor(midLat / GRID_SIZE);
+        const gy = Math.floor(midLon / GRID_SIZE);
+        const key = `${gx},${gy}`;
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key).push(el);
+    }
+
+    const MAX_DIST_DEG = 0.00045;
+    const matchedResults = new Array(routePoints.length);
+    let lastWayId = null;
+    let lastHighway = null;
+
+    // Helper to process a single batch
+    const matchPoint = (point, lastWayId, lastHighway) => {
+        let closestElement = null;
+        let maxScore = -Infinity;
+        let bestDist = Infinity;
+
+        const gx = Math.floor(point.lat / GRID_SIZE);
+        const gy = Math.floor(point.lng / GRID_SIZE);
+
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                const key = `${gx + dx},${gy + dy}`;
+                const cell = grid.get(key);
+                if (!cell) continue;
+
+                for (const el of cell) {
+                    if (el.type === 'node' || (el.lat1 === el.lat2 && el.lon1 === el.lon2)) {
+                        continue;
+                    }
+
+                    const dist = pointToSegmentDistance(point.lat, point.lng, el.lat1, el.lon1, el.lat2, el.lon2);
+                    if (dist > MAX_DIST_DEG) continue;
+
+                    const hw = el.tags?.highway || 'unknown';
+                    const priority = HIGHWAY_PRIORITY[hw] || 0;
+                    const distMeters = dist * 111320;
+
+                    let score = priority - (distMeters * 35);
+
+                    if (el.tags?.tunnel === 'yes') score -= 60;
+                    if (el.tags?.layer && parseInt(el.tags.layer) < 0) score -= 50;
+
+                    if (el.id === lastWayId) {
+                        score += 50;
+                    } else if (hw === lastHighway) {
+                        score += 30;
+                    }
+
+                    if (score > maxScore) {
+                        maxScore = score;
+                        closestElement = el;
+                        bestDist = dist;
+                    }
+                }
+            }
+        }
+
+        if (!closestElement || bestDist > MAX_DIST_DEG || !closestElement.tags) {
+            return {
+                result: { highway: 'unknown', surface: 'unknown', smoothness: 'unknown' },
+                wayId: null,
+                highway: 'unknown'
+            };
+        }
+
+        return {
+            result: {
+                highway: closestElement.tags.highway || 'unknown',
+                surface: closestElement.tags.surface || 'unknown',
+                smoothness: closestElement.tags.smoothness || 'unknown'
+            },
+            wayId: closestElement.id,
+            highway: closestElement.tags.highway || 'unknown'
+        };
+    };
+
+    return new Promise((resolve, reject) => {
+        let currentIndex = 0;
+
+        function processNextBatch() {
+            if (signal && signal.aborted) {
+                return reject(new Error('Aborted'));
+            }
+
+            const end = Math.min(currentIndex + batchSize, routePoints.length);
+            for (; currentIndex < end; currentIndex++) {
+                const { result, wayId, highway } = matchPoint(routePoints[currentIndex], lastWayId, lastHighway);
+                matchedResults[currentIndex] = result;
+                lastWayId = wayId;
+                lastHighway = highway;
+            }
+
+            if (onProgress) {
+                onProgress(currentIndex / routePoints.length);
+            }
+
+            if (currentIndex < routePoints.length) {
+                requestAnimationFrame(processNextBatch);
+            } else {
+                // Post-process smoothing
+                for (let i = 1; i < matchedResults.length - 1; i++) {
+                    const prev = matchedResults[i - 1].highway;
+                    const curr = matchedResults[i].highway;
+                    const next = matchedResults[i + 1].highway;
+
+                    if (curr !== prev && prev === next) {
+                        matchedResults[i] = { ...matchedResults[i - 1] };
+                    }
+                }
+                resolve(matchedResults);
+            }
+        }
+
+        requestAnimationFrame(processNextBatch);
+    });
 }
 
 export function matchOSMDataToRoute(osmData, routePoints) {

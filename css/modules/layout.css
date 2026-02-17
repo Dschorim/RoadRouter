@@ -1,6 +1,6 @@
 .sidebar-card {
     width: 380px;
-    max-height: calc(100vh - 242px - 24px);
+    max-height: calc(100vh - 332px);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 16px;
@@ -51,7 +51,7 @@
     pointer-events: none;
 }
 
-.sidebar-card.drag-over > * {
+.sidebar-card.drag-over>* {
     position: relative;
 }
 

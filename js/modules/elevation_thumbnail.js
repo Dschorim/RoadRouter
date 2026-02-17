@@ -3,11 +3,17 @@
 export function generateElevationThumbnail(elevationData, width = 200, height = 40) {
     if (!elevationData || elevationData.length < 2) return null;
 
-    const elevations = elevationData.map(d => d.elev);
+    // Aggressively downsample to max 150 points for the thumbnail
+    // This looks identical in a small preview but drastically reduces SVG/base64 size
+    const MAX_POINTS = 150;
+    const step = Math.max(1, Math.floor(elevationData.length / MAX_POINTS));
+    const sampledData = elevationData.filter((_, i) => i % step === 0 || i === elevationData.length - 1);
+
+    const elevations = sampledData.map(d => d.elev);
     const minE = Math.min(...elevations);
     const maxE = Math.max(...elevations);
     const range = maxE - minE;
-    
+
     if (range < 1) return null;
 
     // Add 4px padding to prevent border clipping
@@ -16,8 +22,8 @@ export function generateElevationThumbnail(elevationData, width = 200, height = 
     const innerHeight = height - pad * 2;
 
     // Generate path points with padding
-    const points = elevationData.map((d, i) => {
-        const x = pad + (i / (elevationData.length - 1)) * innerWidth;
+    const points = sampledData.map((d, i) => {
+        const x = pad + (i / (sampledData.length - 1)) * innerWidth;
         const y = pad + innerHeight - ((d.elev - minE) / range) * innerHeight;
         return `${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(' ');

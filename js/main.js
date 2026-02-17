@@ -982,7 +982,7 @@ function setupAuthUI() {
         if (APP.activeRouteId) {
             const mode = await UI_MODAL.confirm(
                 "Update Route",
-                `Update existing route "${APP.activeRouteName}"? \n\n(Choose 'No' to save as a new route instead)`,
+                `Update existing route "${APP.activeRouteName}"?`,
                 "Update",
                 "Save as New"
             );
@@ -1013,6 +1013,11 @@ function setupAuthUI() {
                     delete routeToSave.legs;
                     delete routeToSave.weight_name;
                     delete routeToSave.weight;
+                    delete routeToSave.osmData;
+                    delete routeToSave.osmAttributes;
+                    if (routeToSave.steps) delete routeToSave.steps;
+                    if (routeToSave.voice_instructions) delete routeToSave.voice_instructions;
+                    if (routeToSave.banner_instructions) delete routeToSave.banner_instructions;
 
                     await AUTH.updateExistingRoute(APP.activeRouteId, APP.activeRouteName, {
                         points: APP.routePoints,
@@ -1048,8 +1053,8 @@ function setupAuthUI() {
                 // Apply smoothing before saving (same as used for gain/loss calculation)
                 const smoothedData = smoothElevationData(APP.elevationData);
 
-                // Aggressively downsample to max 600 points to reduce payload size
-                const step = Math.max(1, Math.floor(smoothedData.length / 600));
+                // Aggressively downsample to max 400 points to reduce payload size
+                const step = Math.max(1, Math.floor(smoothedData.length / 400));
                 const downsampledData = smoothedData.filter((_, i) => i % step === 0 || i === smoothedData.length - 1);
 
                 // Replace the route geometry with downsampled points that have elevation
@@ -1063,6 +1068,11 @@ function setupAuthUI() {
             delete routeToSave.legs;
             delete routeToSave.weight_name;
             delete routeToSave.weight;
+            delete routeToSave.osmData;
+            delete routeToSave.osmAttributes;
+            if (routeToSave.steps) delete routeToSave.steps;
+            if (routeToSave.voice_instructions) delete routeToSave.voice_instructions;
+            if (routeToSave.banner_instructions) delete routeToSave.banner_instructions;
 
             const res = await AUTH.saveRoute(sanitizedName, {
                 points: APP.routePoints,

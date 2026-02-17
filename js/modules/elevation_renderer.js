@@ -2,13 +2,14 @@ import { formatDistance, formatDuration, haversineDistance } from '../utils.js';
 import { getElevations } from '../elevation.js';
 import { APP } from './state.js';
 import { createOrUpdateRoutePreview, removeRoutePreview } from './ui.js';
-import { fetchOSMData, matchOSMDataToRoute, HIGHWAY_LABELS, SURFACE_LABELS, SMOOTHNESS_LABELS } from '../osm_data.js';
+import { fetchOSMData, matchOSMDataToRouteAsync, HIGHWAY_LABELS, SURFACE_LABELS, SMOOTHNESS_LABELS } from '../osm_data.js';
 
 // Current coloring mode
 let coloringMode = 'gradient'; // 'gradient', 'highway', 'surface', 'smoothness'
 let osmAttributes = null;
 let osmFetchTimeout = null;
 let currentRouteId = 0;
+let osmMatchAbortController = null;
 
 // Color Palettes for OSM attributes
 const PALETTES = {
@@ -49,6 +50,9 @@ const PALETTES = {
         unknown: { fill: 'rgba(150, 150, 150, 0.35)', stroke: '#969696' }
     }
 };
+
+const CHART_PADDING_TOP = 20;
+const CHART_PADDING_BOTTOM = 0;
 
 // Sample route coordinates progressively - start coarse, refine over time
 function sampleRouteCoordinates(coords, intervalMeters = 10) {
@@ -242,16 +246,29 @@ export async function fetchAndRenderElevation() {
     if (!osmAttributes) {
         const routeIdSnapshot = currentRouteId;
 
-        const processOsmData = (data) => {
+        // Cancel any previous matching process
+        if (osmMatchAbortController) {
+            osmMatchAbortController.abort();
+        }
+        osmMatchAbortController = new AbortController();
+        const signal = osmMatchAbortController.signal;
+
+        const processOsmData = async (data) => {
             if (routeIdSnapshot === currentRouteId) {
-                osmAttributes = matchOSMDataToRoute(data, samples);
-                if (APP.currentRoute) {
-                    APP.currentRoute.osmAttributes = osmAttributes;
-                }
-                // Only re-render if we are in a mode that needs these attributes
-                if (APP.elevationData && coloringMode !== 'gradient') {
-                    const displayData = downsampleForDisplay(APP.elevationData);
-                    renderElevationProfile(displayData);
+                try {
+                    osmAttributes = await matchOSMDataToRouteAsync(data, samples, { signal });
+                    if (APP.currentRoute) {
+                        APP.currentRoute.osmAttributes = osmAttributes;
+                    }
+                    // Only re-render if we are in a mode that needs these attributes
+                    if (APP.elevationData && coloringMode !== 'gradient') {
+                        const displayData = downsampleForDisplay(APP.elevationData);
+                        renderElevationProfile(displayData);
+                    }
+                } catch (e) {
+                    if (e.message !== 'Aborted') {
+                        console.error("OSM matching failed:", e);
+                    }
                 }
             }
         };
@@ -263,8 +280,12 @@ export async function fetchAndRenderElevation() {
             // Background fetch fallback
             (async () => {
                 if (routeIdSnapshot === currentRouteId) {
-                    const osmData = await fetchOSMData(coords);
-                    processOsmData(osmData);
+                    try {
+                        const osmData = await fetchOSMData(coords);
+                        processOsmData(osmData);
+                    } catch (e) {
+                        console.error("Background OSM fetch failed:", e);
+                    }
                 }
             })();
         }
@@ -385,7 +406,7 @@ function drawGridLines(ctx, chartParams, visibleGridPoints) {
     ctx.lineWidth = 1;
 
     visibleGridPoints.forEach(val => {
-        const y = (1 - (val - minE) / (maxE - minE)) * chartHeight;
+        const y = CHART_PADDING_TOP + (1 - (val - minE) / (maxE - minE)) * (chartHeight - CHART_PADDING_TOP - CHART_PADDING_BOTTOM);
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(width, y);
@@ -472,7 +493,7 @@ export function renderElevationProfile(data) {
     // BATCHING: Precompute all points for faster drawing
     const points = data.map((p, i) => ({
         x: (i / (data.length - 1)) * chartWidth,
-        y: (1 - (p.elev - minE) / (maxE - minE)) * chartHeight
+        y: CHART_PADDING_TOP + (1 - (p.elev - minE) / (maxE - minE)) * (chartHeight - CHART_PADDING_TOP - CHART_PADDING_BOTTOM)
     }));
 
     // Draw filled areas
@@ -517,7 +538,7 @@ export function renderElevationProfile(data) {
     const sideScale = document.getElementById('elevationSideScale');
     if (sideScale) {
         sideScale.innerHTML = visibleGridPoints.map(val => {
-            const topPercent = (1 - (val - minE) / (maxE - minE)) * 100;
+            const topPercent = ((CHART_PADDING_TOP + (1 - (val - minE) / (maxE - minE)) * (chartHeight - CHART_PADDING_TOP - CHART_PADDING_BOTTOM)) / height) * 100;
             return `<div class="sidescale-label" style="top: ${topPercent}%">${val} m</div>`;
         }).join('');
     }
@@ -662,6 +683,83 @@ export function renderElevationProfile(data) {
             if (tooltip) tooltip.style.display = 'none';
         }
     });
+
+    // Draw waypoint markers
+    drawWaypointMarkers(ctx, chartState);
+}
+
+function drawWaypointMarkers(ctx, state) {
+    const { data, width, height, chartWidth, chartHeight, minE, maxE, visibleGridPoints } = state;
+    if (!APP.routePoints || APP.routePoints.length === 0) return;
+
+    APP.routePoints.forEach((point, index) => {
+        if (point.lat === null || point.lng === null) return;
+        if (point.type === 'start' || point.type === 'dest') return;
+
+        // Find closest index in elevation data
+        let closestIdx = 0;
+        let minLatLngDist = Infinity;
+        for (let i = 0; i < data.length; i++) {
+            const dlat = data[i].lat - point.lat;
+            const dlng = data[i].lng - point.lng;
+            const dist = dlat * dlat + dlng * dlng;
+            if (dist < minLatLngDist) {
+                minLatLngDist = dist;
+                closestIdx = i;
+            }
+        }
+
+        const x = (closestIdx / (data.length - 1)) * chartWidth;
+        const colorDark = '#8fa3f0'; // Intermediate waypoint color
+        const label = index.toString();
+
+        // Calculate Y position - bottom of badge tangents the TOP grid line
+        const topGridPoint = (visibleGridPoints && visibleGridPoints.length) ? visibleGridPoints[visibleGridPoints.length - 1] : null;
+        const badgeRadius = 10;
+        const gridLineY = topGridPoint !== null ? CHART_PADDING_TOP + (1 - (topGridPoint - minE) / (maxE - minE)) * (chartHeight - CHART_PADDING_TOP - CHART_PADDING_BOTTOM) : CHART_PADDING_TOP;
+        const badgeY = gridLineY - badgeRadius;
+
+        // Draw vertical line from chart bottom to the badge
+        ctx.beginPath();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = `${colorDark}66`; // 40% opacity
+        ctx.lineWidth = 1.5;
+        ctx.moveTo(x, badgeY);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Draw badge
+        // badgeRadius is defined above
+
+        // Shadow
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = 'rgba(0,0,0,0.4)';
+        ctx.shadowOffsetY = 2;
+
+        // Gradient Background
+        const grad = ctx.createLinearGradient(x - badgeRadius, badgeY - badgeRadius, x + badgeRadius, badgeY + badgeRadius);
+        const colorLight = '#c7d2f9';
+        grad.addColorStop(0, colorLight);
+        grad.addColorStop(1, colorDark);
+
+        ctx.beginPath();
+        ctx.arc(x, badgeY, badgeRadius, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // Reset shadow
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
+        ctx.shadowColor = 'transparent';
+
+        // Label
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 11px Inter, system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, x, badgeY);
+    });
 }
 
 // Helper to draw just the cursor line without full redraw
@@ -675,10 +773,13 @@ function drawCursorLine(ctx, state, idx) {
         drawGridLines(ctx, state, visibleGridPoints);
     }
 
+    // Redraw waypoints
+    drawWaypointMarkers(ctx, state);
+
     // BATCHING: Precompute points (same as main render)
     const points = data.map((p, i) => ({
         x: (i / (data.length - 1)) * chartWidth,
-        y: (1 - (p.elev - minE) / (maxE - minE)) * chartHeight
+        y: CHART_PADDING_TOP + (1 - (p.elev - minE) / (maxE - minE)) * (chartHeight - CHART_PADDING_TOP - CHART_PADDING_BOTTOM)
     }));
 
     // Redraw filled areas
@@ -799,7 +900,7 @@ function setupColoringModeDropdown() {
                         const samples = sampleRouteCoordinates(coords, 10);
                         const osmData = await fetchOSMData(coords);
                         if (routeIdSnapshot === currentRouteId && coloringMode !== 'gradient') {
-                            osmAttributes = matchOSMDataToRoute(osmData, samples);
+                            osmAttributes = await matchOSMDataToRouteAsync(osmData, samples);
                             // Store with route
                             if (APP.currentRoute) {
                                 APP.currentRoute.osmAttributes = osmAttributes;
