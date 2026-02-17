@@ -237,5 +237,5 @@
 }
 
 .leaflet-control-attribution {
-    margin-right: 25px !important;
+    margin-right: -25px !important;
 }

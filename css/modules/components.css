@@ -64,6 +64,12 @@
     border-color: var(--color-primary);
 }
 
+.route-point-item.selected {
+    background: rgba(50, 184, 198, 0.1);
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px rgba(50, 184, 198, 0.2);
+}
+
 .btn {
     padding: 10px 16px;
     border: none;

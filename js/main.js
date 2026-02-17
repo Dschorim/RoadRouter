@@ -10,6 +10,7 @@ import { formatDistance, formatDuration } from './utils.js';
 import { getElevations } from './elevation.js';
 import { fetchAndRenderElevation, renderElevationProfile } from './modules/elevation_renderer.js';
 import { generateElevationThumbnail } from './modules/elevation_thumbnail.js';
+import { fetchOSMData } from './osm_data.js';
 import { AUTH } from './modules/auth.js';
 import { UI_MODAL } from './modules/ui_modals.js';
 
@@ -89,6 +90,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const importBtn = document.getElementById('importGpxHeaderBtn');
     if (importBtn) importBtn.addEventListener('click', importGPX);
 
+    // Immediate resize handling
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+        if (!APP.elevationData || document.getElementById('elevationCard')?.style.display === 'none') return;
+
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+            if (typeof fetchAndRenderElevation === 'function') {
+                fetchAndRenderElevation();
+            }
+        }, 50); // Small debounce to avoid too many redraws while dragging
+    });
+
     const profileBtn = document.getElementById('profileBtn');
     if (profileBtn) {
         profileBtn.addEventListener('click', () => {
@@ -126,7 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
             e.stopPropagation();
             sidebarCard.classList.add('drag-over');
         });
-        
+
         sidebarCard.addEventListener('dragleave', (e) => {
             if (!e.dataTransfer.types.includes('Files')) {
                 return;
@@ -135,7 +149,7 @@ document.addEventListener('DOMContentLoaded', () => {
             e.stopPropagation();
             sidebarCard.classList.remove('drag-over');
         });
-        
+
         sidebarCard.addEventListener('drop', (e) => {
             if (!e.dataTransfer.types.includes('Files')) {
                 return;
@@ -143,7 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
             e.preventDefault();
             e.stopPropagation();
             sidebarCard.classList.remove('drag-over');
-            
+
             const files = e.dataTransfer.files;
             if (files.length > 0 && files[0].name.toLowerCase().endsWith('.gpx')) {
                 parseGPXFile(files[0]);
@@ -185,7 +199,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 icon.setAttribute('points', '18 15 12 9 6 15');
             }
         }
-        
+
         collapseElevationBtn.addEventListener('click', () => {
             elevationCard.classList.toggle('collapsed');
             const icon = collapseElevationBtn.querySelector('svg polyline');
@@ -285,16 +299,48 @@ async function calculateRoute() {
         APP.map.on('mouseup', APP.routeMouseUpHandler || routeMouseUpHandler);
 
         // Update Stats
-        const distance = APP.currentRoute.distance;
-        const duration = APP.currentRoute.duration;
+        let distance = APP.currentRoute.distance || 0;
+        let duration = APP.currentRoute.duration || 0;
+
+        // Fallback for some OSRM responses
+        if ((distance === 0 || duration === 0) && APP.currentRoute.legs && APP.currentRoute.legs[0]) {
+            distance = distance || APP.currentRoute.legs[0].distance || 0;
+            duration = duration || APP.currentRoute.legs[0].duration || 0;
+        }
+
         const distEl = document.getElementById('elev-distance-val');
         const durEl = document.getElementById('elev-duration-val');
+        const speedEl = document.getElementById('elev-speed-val');
+
         if (distEl) distEl.textContent = formatDistance(distance);
         if (durEl) durEl.textContent = formatDuration(duration);
+
+        if (speedEl) {
+            const distKm = distance / 1000;
+            const durHours = duration / 3600;
+            if (distKm > 0 && durHours > 0) {
+                const avgSpeedKMH = distKm / durHours;
+                speedEl.textContent = `${avgSpeedKMH.toFixed(1)} km/h`;
+            } else {
+                speedEl.textContent = '0.0 km/h';
+            }
+        }
 
         // Show Elevation Card (Simplified)
         const elevCard = document.getElementById('elevationCard');
         if (elevCard) elevCard.style.display = 'block';
+
+        // Eagerly fetch OSM data
+        (async () => {
+            try {
+                const osmData = await fetchOSMData(APP.currentRoute.geometry.coordinates);
+                if (APP.currentRoute) {
+                    APP.currentRoute.osmData = osmData;
+                }
+            } catch (e) {
+                console.error("Eager OSM fetch failed:", e);
+            }
+        })();
 
         // Fetch and Render Elevation
         fetchAndRenderElevation();
@@ -604,10 +650,10 @@ function generateGPX(name = 'Route') {
     const date = new Date().toISOString();
     const routeName = APP.activeRouteName || name;
     const duration = APP.currentRoute?.duration || 0;
-    
+
     let coords = [];
     let elevations = [];
-    
+
     // Use elevation data if available and apply smoothing
     if (APP.elevationData && APP.elevationData.length > 0) {
         const smoothedData = smoothElevationData(APP.elevationData);
@@ -618,14 +664,14 @@ function generateGPX(name = 'Route') {
     } else {
         coords = APP.routePoints.filter(p => p.lat !== null && p.lng !== null).map(p => [p.lng, p.lat]);
     }
-    
+
     const trkpts = coords.map(([lon, lat], i) => {
         const ele = elevations[i] !== undefined ? `\n          <ele>${elevations[i]}</ele>` : '';
         return `        <trkpt lat="${lat}" lon="${lon}">${ele}\n        </trkpt>`;
     }).join('\n');
-    
+
     const durationExt = duration > 0 ? `\n    <extensions>\n      <duration>${Math.round(duration)}</duration>\n    </extensions>` : '';
-    
+
     return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Route Planner" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata>\n    <name>${routeName}</name>\n    <time>${date}</time>\n  </metadata>\n  <trk>\n    <name>${routeName}</name>${durationExt}\n    <trkseg>\n${trkpts}\n    </trkseg>\n  </trk>\n</gpx>`;
 }
 
@@ -755,18 +801,18 @@ function setupAuthUI() {
             return;
         }
         userProfileModal?.classList.add('active');
-        
+
         // Only reset to account tab on first login
         if (!APP.lastActiveTab) {
             const tabBtns = document.querySelectorAll('.tab-btn');
             tabBtns.forEach(b => b.classList.remove('active'));
             document.querySelector('.tab-btn[data-tab="account"]')?.classList.add('active');
-            
+
             const panes = document.querySelectorAll('.tab-pane');
             panes.forEach(p => p.classList.remove('active'));
             document.getElementById('tab-account')?.classList.add('active');
         }
-        
+
         renderSavedRoutes();
     });
 
@@ -946,28 +992,28 @@ function setupAuthUI() {
                 try {
                     // Add elevation data to route geometry before updating
                     const routeToSave = JSON.parse(JSON.stringify(APP.currentRoute));
-                    
+
                     // Use the densely sampled elevation data from APP.elevationData
                     if (APP.elevationData && APP.elevationData.length > 0) {
                         // Apply smoothing before saving (same as used for gain/loss calculation)
                         const smoothedData = smoothElevationData(APP.elevationData);
-                        
+
                         // Aggressively downsample to max 200 points to reduce payload size
                         const step = Math.max(1, Math.floor(smoothedData.length / 200));
                         const downsampledData = smoothedData.filter((_, i) => i % step === 0 || i === smoothedData.length - 1);
-                        
+
                         // Replace the route geometry with downsampled points that have elevation
                         const newCoordinates = downsampledData.map(point => {
                             return [point.lng, point.lat, Math.round(point.elev)];
                         });
                         routeToSave.geometry.coordinates = newCoordinates;
                     }
-                    
+
                     // Remove unnecessary data to reduce payload
                     delete routeToSave.legs;
                     delete routeToSave.weight_name;
                     delete routeToSave.weight;
-                    
+
                     await AUTH.updateExistingRoute(APP.activeRouteId, APP.activeRouteName, {
                         points: APP.routePoints,
                         route: routeToSave,
@@ -996,28 +1042,28 @@ function setupAuthUI() {
         try {
             // Add elevation data to route geometry before saving
             const routeToSave = JSON.parse(JSON.stringify(APP.currentRoute));
-            
+
             // Use the densely sampled elevation data from APP.elevationData
             if (APP.elevationData && APP.elevationData.length > 0) {
                 // Apply smoothing before saving (same as used for gain/loss calculation)
                 const smoothedData = smoothElevationData(APP.elevationData);
-                
+
                 // Aggressively downsample to max 600 points to reduce payload size
                 const step = Math.max(1, Math.floor(smoothedData.length / 600));
                 const downsampledData = smoothedData.filter((_, i) => i % step === 0 || i === smoothedData.length - 1);
-                
+
                 // Replace the route geometry with downsampled points that have elevation
                 const newCoordinates = downsampledData.map(point => {
                     return [point.lng, point.lat, Math.round(point.elev)];
                 });
                 routeToSave.geometry.coordinates = newCoordinates;
             }
-            
+
             // Remove unnecessary data to reduce payload
             delete routeToSave.legs;
             delete routeToSave.weight_name;
             delete routeToSave.weight;
-            
+
             const res = await AUTH.saveRoute(sanitizedName, {
                 points: APP.routePoints,
                 route: routeToSave,
@@ -1052,7 +1098,7 @@ function setupAuthUI() {
     tabBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             const tabId = btn.getAttribute('data-tab');
-            
+
             APP.lastActiveTab = tabId;
 
             // Update buttons
@@ -1068,12 +1114,12 @@ function setupAuthUI() {
             if (tabId === 'routes') {
                 renderSavedRoutes();
             }
-            
+
             // Load users when switching to admin tab
             if (tabId === 'admin') {
                 loadAdminUsers();
             }
-            
+
             // Update MFA status when switching to security tab
             if (tabId === 'security') {
                 updateMfaStatus();
@@ -1109,7 +1155,7 @@ function setupAuthUI() {
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0, 256, 256);
                     const base64Data = canvas.toDataURL('image/jpeg', 0.8);
-                    
+
                     try {
                         await AUTH.updateProfile({ avatar_data: base64Data });
                         updateUIForAuth(AUTH.user);
@@ -1193,12 +1239,12 @@ function updateUIForAuth(user) {
         if (profileUsername) profileUsername.textContent = usernameDisplay;
         if (headerRole) headerRole.textContent = roleDisplay;
         if (profileRole) profileRole.textContent = roleDisplay;
-        
+
         // Show admin tab if user is admin
         if (adminTabBtn) {
             adminTabBtn.style.display = user.role === 'ADMIN' ? 'flex' : 'none';
         }
-        
+
         if (user.avatar_data) {
             if (headerAvatar) {
                 headerAvatar.innerHTML = `<img src="${user.avatar_data}" style="display:block; width:100%; height:100%; object-fit:cover; border-radius:50%;">`;
@@ -1241,7 +1287,7 @@ async function renderSavedRoutes() {
     try {
         const routes = await AUTH.getSavedRoutes();
         const hasDeviceCreds = await AUTH.getDeviceCredentials();
-        
+
         if (routes.length === 0) {
             list.innerHTML = '<div class="empty-state">No saved routes yet</div>';
             return;
@@ -1388,6 +1434,7 @@ async function startNewRoute() {
 
     APP.activeRouteId = null;
     APP.activeRouteName = null;
+    APP.lastFocusedInputId = null;
     APP.routePoints = [
         { id: APP.nextPointId++, lat: null, lng: null, address: '', type: 'start' },
         { id: APP.nextPointId++, lat: null, lng: null, address: '', type: 'dest' }
@@ -1421,19 +1468,19 @@ function useCurrentLocation() {
                 startPoint.lat = latitude;
                 startPoint.lng = longitude;
                 startPoint.address = 'Locating...';
-                
+
                 UI.renderRoutePoints();
                 UI.updateMapMarkers();
-                
+
                 if (APP.map) {
                     APP.map.setView([latitude, longitude], 14, { animate: true });
                 }
-                
+
                 reverseGeocode(latitude, longitude).then((address) => {
                     startPoint.address = address;
                     UI.renderRoutePoints();
                 });
-                
+
                 debouncedCalculateRoute();
             }
         },
@@ -1448,7 +1495,7 @@ function updateSaveButton() {
     if (saveRouteBtn && AUTH.isAuthenticated()) {
         saveRouteBtn.style.display = APP.currentRoute ? 'flex' : 'none';
     }
-    
+
     const exportBtn = document.getElementById('exportGpxHeaderBtn');
     if (exportBtn) {
         exportBtn.disabled = !APP.currentRoute;
@@ -1463,7 +1510,7 @@ async function loadAdminUsers() {
 
     try {
         const users = await AUTH.adminListUsers();
-        
+
         if (users.length === 0) {
             list.innerHTML = '<div class="empty-state">No users found</div>';
             return;
@@ -1508,7 +1555,7 @@ async function loadAdminUsers() {
                 </div>
             </div>
         `).join('');
-        
+
         // Check MFA status for each user
         users.forEach(async u => {
             const hasMfa = await checkUserMfaStatus(u.username);
@@ -1537,7 +1584,7 @@ async function checkUserMfaStatus(username) {
 function updateMfaStatus() {
     const mfaStatus = document.getElementById('mfaStatus');
     if (!mfaStatus || !AUTH.isAuthenticated()) return;
-    
+
     // Check if user has MFA enabled by checking if they can setup (no active MFA)
     AUTH.adminListUsers().then(users => {
         const currentUser = users.find(u => u.username === AUTH.user.username);
@@ -1563,10 +1610,10 @@ function updateMfaStatus() {
                 });
             }
         }
-    }).catch(() => {});
+    }).catch(() => { });
 }
 
-window.resetUserPassword = async function(username) {
+window.resetUserPassword = async function (username) {
     const newPassword = await UI_MODAL.prompt('Reset Password', `Enter new password for ${username}:`, 'New password');
     if (!newPassword) return;
 
@@ -1578,7 +1625,7 @@ window.resetUserPassword = async function(username) {
     }
 };
 
-window.resetUserMfa = async function(username) {
+window.resetUserMfa = async function (username) {
     const confirmed = await UI_MODAL.confirm('Reset MFA', `Reset MFA for ${username}?`, 'Reset', 'Cancel');
     if (!confirmed) return;
 
@@ -1591,7 +1638,7 @@ window.resetUserMfa = async function(username) {
     }
 };
 
-window.deleteUser = async function(username) {
+window.deleteUser = async function (username) {
     const confirmed = await UI_MODAL.confirm('Delete User', `Are you sure you want to delete ${username}? This cannot be undone.`, 'Delete', 'Cancel');
     if (!confirmed) return;
 
@@ -1604,7 +1651,7 @@ window.deleteUser = async function(username) {
     }
 };
 
-window.promoteUser = async function(username) {
+window.promoteUser = async function (username) {
     const confirmed = await UI_MODAL.confirm('Make Admin', `Promote ${username} to admin?`, 'Promote', 'Cancel');
     if (!confirmed) return;
 
@@ -1617,7 +1664,7 @@ window.promoteUser = async function(username) {
     }
 };
 
-window.demoteUser = async function(username) {
+window.demoteUser = async function (username) {
     const confirmed = await UI_MODAL.confirm('Demote to User', `Demote ${username} to regular user?`, 'Demote', 'Cancel');
     if (!confirmed) return;
 
@@ -1729,18 +1776,18 @@ async function loadDeviceCredentials() {
     }
 }
 
-window.uploadRouteToDevice = async function(routeId) {
+window.uploadRouteToDevice = async function (routeId) {
     event.stopPropagation();
     event.preventDefault();
-    
+
     try {
         const btn = event.target.closest('button');
         btn.disabled = true;
         btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
-        
+
         await AUTH.uploadRouteToDevice(routeId);
         await UI_MODAL.alert('Success', 'Route uploaded to device!');
-        
+
         btn.disabled = false;
         btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="5" y1="18" x2="19" y2="18"></line><line x1="12" y1="18" x2="12" y2="22"></line></svg>';
     } catch (err) {

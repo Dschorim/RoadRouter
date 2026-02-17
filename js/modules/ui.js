@@ -51,10 +51,22 @@ function closeAllMenus() {
     }
 }
 
-// Global listener to close menus on outside click
+// Global listener to close menus and deselect points on outside click
 document.addEventListener('click', (e) => {
-    if (!e.target.closest('.custom-menu-overlay') && !e.target.closest('#contextMenu') && !e.target.closest('.map-pin')) {
+    const isMenuClick = e.target.closest('.custom-menu-overlay') || e.target.closest('#contextMenu');
+    const isPinClick = e.target.closest('.map-pin');
+    const isInputClick = e.target.closest('.route-point-item');
+    const isMapClick = e.target.closest('#map');
+
+    if (!isMenuClick && !isPinClick) {
         closeAllMenus();
+    }
+
+    if (!isInputClick && !isMapClick && !isMenuClick) {
+        if (APP.lastFocusedInputId !== null) {
+            APP.lastFocusedInputId = null;
+            document.querySelectorAll('.route-point-item.selected').forEach(el => el.classList.remove('selected'));
+        }
     }
 });
 
@@ -62,9 +74,10 @@ document.addEventListener('click', (e) => {
 window.removePoint = removePoint;
 
 export function removePoint(id) {
+    if (APP.lastFocusedInputId === id) APP.lastFocusedInputId = null;
     const removedPoint = APP.routePoints.find(p => p.id === id);
     APP.routePoints = APP.routePoints.filter(p => p.id !== id);
-    
+
     if (APP.routePoints.length === 1) {
         const remaining = APP.routePoints[0];
         // If we removed the start, remaining point stays as destination
@@ -91,7 +104,7 @@ export function removePoint(id) {
     } else {
         updatePointTypes();
     }
-    
+
     renderRoutePoints();
     updateMapMarkers();
     if (_calculateRoute) _calculateRoute();
@@ -170,8 +183,9 @@ export function renderRoutePoints() {
         const placeholder = point.type === 'start' ? 'Start Point' : point.type === 'dest' ? 'Destination' : 'Waypoint';
         const locationBtn = (point.type === 'start' && point.lat === null) ? '<button class="btn-location" onclick="useCurrentLocation()" title="Use current location"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" stroke-width="2"><circle cx="12" cy="12" r="8"></circle><line x1="12" y1="2" x2="12" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line></svg></button>' : '';
 
+        const isSelected = APP.lastFocusedInputId === point.id;
         const div = document.createElement('div');
-        div.className = 'route-point-item';
+        div.className = `route-point-item ${isSelected ? 'selected' : ''}`;
         div.draggable = true;
         div.dataset.id = point.id;
 
@@ -190,7 +204,16 @@ export function renderRoutePoints() {
         const input = document.getElementById(`input-${point.id}`);
         input.classList.add('search-input');
         input.addEventListener('focus', () => {
+            // Remove selection from others
+            document.querySelectorAll('.route-point-item.selected').forEach(el => el.classList.remove('selected'));
+
+            // Add selection to this one
+            div.classList.add('selected');
             APP.lastFocusedInputId = point.id;
+        });
+        input.addEventListener('blur', () => {
+            // We don't remove the class or null the ID here, 
+            // allowing the map click handler to catch it.
         });
 
         const badge = div.querySelector('.point-type-badge');
@@ -245,12 +268,12 @@ export function renderRoutePoints() {
 
         div.addEventListener('dragover', (e) => {
             e.preventDefault();
-            
+
             // Only show drop indicator for waypoint reordering, not for file drops
             if (e.dataTransfer.types.includes('Files')) {
                 return;
             }
-            
+
             e.dataTransfer.dropEffect = 'move';
             document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
 
@@ -310,60 +333,60 @@ export function renderRoutePoints() {
         // Touch support for mobile
         let touchStartY = 0;
         let touchElement = null;
-        
+
         div.addEventListener('touchstart', (e) => {
             if (!e.target.closest('.btn-drag')) return;
             touchStartY = e.touches[0].clientY;
             touchElement = div;
             div.style.opacity = '0.5';
         });
-        
+
         div.addEventListener('touchmove', (e) => {
             if (!touchElement) return;
             e.preventDefault();
             const touch = e.touches[0];
             const elements = document.elementsFromPoint(touch.clientX, touch.clientY);
             const targetItem = elements.find(el => el.classList.contains('route-point-item') && el !== touchElement);
-            
+
             document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
-            
+
             if (targetItem) {
                 const rect = targetItem.getBoundingClientRect();
                 const midpoint = rect.top + rect.height / 2;
                 const isTopHalf = touch.clientY < midpoint;
-                
+
                 const indicator = document.createElement('div');
                 indicator.className = 'drop-indicator-line';
                 indicator.style.cssText = 'position:absolute;left:0;right:0;height:2px;background:#32b8c6;pointer-events:none;z-index:100;';
-                
+
                 const container = targetItem.parentElement;
                 if (isTopHalf) {
                     indicator.style.top = (targetItem.offsetTop - 5) + 'px';
                 } else {
                     indicator.style.top = (targetItem.offsetTop + targetItem.offsetHeight + 3) + 'px';
                 }
-                
+
                 container.style.position = 'relative';
                 container.appendChild(indicator);
                 targetItem.dataset.dropBefore = isTopHalf ? 'true' : 'false';
             }
         });
-        
+
         div.addEventListener('touchend', (e) => {
             if (!touchElement) return;
             div.style.opacity = '1';
-            
+
             const touch = e.changedTouches[0];
             const elements = document.elementsFromPoint(touch.clientX, touch.clientY);
             const targetItem = elements.find(el => el.classList.contains('route-point-item') && el !== touchElement);
-            
+
             document.querySelectorAll('.drop-indicator-line').forEach(el => el.remove());
-            
+
             if (targetItem) {
                 const fromIndex = APP.routePoints.findIndex(p => p.id == touchElement.dataset.id);
                 const toIndex = APP.routePoints.findIndex(p => p.id == targetItem.dataset.id);
                 const dropBefore = targetItem.dataset.dropBefore === 'true';
-                
+
                 if (fromIndex !== -1 && toIndex !== -1) {
                     const [removed] = APP.routePoints.splice(fromIndex, 1);
                     let insertIndex = toIndex;
@@ -373,17 +396,17 @@ export function renderRoutePoints() {
                     } else if (fromIndex > toIndex && !dropBefore) {
                         insertIndex = toIndex + 1;
                     }
-                    
+
                     APP.routePoints.splice(insertIndex, 0, removed);
                     updatePointTypes();
                     renderRoutePoints();
                     updateMapMarkers();
                     if (_calculateRoute) _calculateRoute();
                 }
-                
+
                 delete targetItem.dataset.dropBefore;
             }
-            
+
             touchElement = null;
         });
     });
@@ -523,6 +546,18 @@ export function handleMapClick(latlng) {
 
     const { lat, lng } = latlng;
 
+    // If a point is selected, replace its coordinates
+    if (APP.lastFocusedInputId !== null) {
+        const selectedPoint = APP.routePoints.find(p => p.id === APP.lastFocusedInputId);
+        if (selectedPoint) {
+            selectedPoint.lat = lat;
+            selectedPoint.lng = lng;
+            selectedPoint.address = 'Locating...';
+            finishMapClickAction(lat, lng, selectedPoint);
+            return; // Exit after replacing
+        }
+    }
+
     const startPoint = APP.routePoints.find(p => p.type === 'start');
     const destPoint = APP.routePoints.find(p => p.type === 'dest');
 
@@ -557,6 +592,10 @@ function finishMapClickAction(lat, lng, pointObj) {
 
     reverseGeocode(lat, lng).then(addr => {
         pointObj.address = addr;
+        // If this was the selected point, update input focus state
+        if (APP.lastFocusedInputId === pointObj.id) {
+            APP.lastFocusedInputId = null;
+        }
         renderRoutePoints();
     });
 }
@@ -626,6 +665,7 @@ export function addPointAsStart(lat, lng) {
     } else {
         APP.routePoints.push({ id: APP.nextPointId++, lat, lng, address: 'Locating...', type: 'start' });
     }
+    APP.lastFocusedInputId = null;
     closeAllMenus();
     finishMapClickAction(lat, lng, APP.routePoints[0]);
     showRouteContent();
@@ -638,11 +678,13 @@ export function addPointAsDestination(lat, lng) {
         last.lat = lat;
         last.lng = lng;
         last.address = 'Locating...';
+        APP.lastFocusedInputId = null;
         closeAllMenus();
         finishMapClickAction(lat, lng, last);
     } else {
         const newDest = { id: APP.nextPointId++, lat, lng, address: 'Locating...', type: 'dest' };
         APP.routePoints.push(newDest);
+        APP.lastFocusedInputId = null;
         closeAllMenus();
         finishMapClickAction(lat, lng, newDest);
     }
@@ -664,6 +706,7 @@ export function addPointAsWaypoint(lat, lng) {
         APP.routePoints.push(newPoint);
     }
 
+    APP.lastFocusedInputId = null;
     closeAllMenus();
     updatePointTypes();
     renderRoutePoints();

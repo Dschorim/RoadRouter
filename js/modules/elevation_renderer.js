@@ -1,19 +1,54 @@
-// elevation_renderer.js
-import CONFIG from '../config.js';
+import { formatDistance, formatDuration, haversineDistance } from '../utils.js';
 import { getElevations } from '../elevation.js';
 import { APP } from './state.js';
-import { createOrUpdateRoutePreview, removeRoutePreview } from './ui.js'; // Ensure these are exported from UI
+import { createOrUpdateRoutePreview, removeRoutePreview } from './ui.js';
+import { fetchOSMData, matchOSMDataToRoute, HIGHWAY_LABELS, SURFACE_LABELS, SMOOTHNESS_LABELS } from '../osm_data.js';
 
-// Haversine distance (meters)
-function haversineDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371000; // meters
-    const toRad = Math.PI / 180;
-    const dLat = (lat2 - lat1) * toRad;
-    const dLon = (lon2 - lon1) * toRad;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-}
+// Current coloring mode
+let coloringMode = 'gradient'; // 'gradient', 'highway', 'surface', 'smoothness'
+let osmAttributes = null;
+let osmFetchTimeout = null;
+let currentRouteId = 0;
+
+// Color Palettes for OSM attributes
+const PALETTES = {
+    highway: {
+        motorway: { fill: 'rgba(230, 100, 100, 0.35)', stroke: '#E64444' },
+        trunk: { fill: 'rgba(250, 150, 100, 0.35)', stroke: '#FA9664' },
+        primary: { fill: 'rgba(255, 200, 100, 0.35)', stroke: '#FFC864' },
+        secondary: { fill: 'rgba(255, 230, 120, 0.35)', stroke: '#FFE678' },
+        tertiary: { fill: 'rgba(255, 255, 180, 0.35)', stroke: '#FFFFB4' },
+        residential: { fill: 'rgba(200, 200, 200, 0.35)', stroke: '#C8C8C8' },
+        service: { fill: 'rgba(180, 180, 180, 0.35)', stroke: '#B4B4B4' },
+        track: { fill: 'rgba(200, 150, 100, 0.35)', stroke: '#C89664' },
+        path: { fill: 'rgba(150, 200, 150, 0.35)', stroke: '#96C896' },
+        cycleway: { fill: 'rgba(100, 150, 255, 0.35)', stroke: '#6496FF' },
+        footway: { fill: 'rgba(255, 150, 200, 0.35)', stroke: '#FF96C8' },
+        unknown: { fill: 'rgba(150, 150, 150, 0.35)', stroke: '#969696' }
+    },
+    surface: {
+        asphalt: { fill: 'rgba(100, 100, 100, 0.35)', stroke: '#646464' },
+        concrete: { fill: 'rgba(180, 180, 180, 0.35)', stroke: '#B4B4B4' },
+        paved: { fill: 'rgba(120, 120, 120, 0.35)', stroke: '#787878' },
+        paving_stones: { fill: 'rgba(200, 180, 160, 0.35)', stroke: '#C8B4A0' },
+        cobblestone: { fill: 'rgba(180, 160, 140, 0.35)', stroke: '#B4A08C' },
+        gravel: { fill: 'rgba(200, 180, 140, 0.35)', stroke: '#C8B48C' },
+        dirt: { fill: 'rgba(180, 140, 100, 0.35)', stroke: '#B48C64' },
+        grass: { fill: 'rgba(120, 200, 120, 0.35)', stroke: '#78C878' },
+        sand: { fill: 'rgba(240, 220, 180, 0.35)', stroke: '#F0DCB4' },
+        unknown: { fill: 'rgba(150, 150, 150, 0.35)', stroke: '#969696' }
+    },
+    smoothness: {
+        excellent: { fill: 'rgba(100, 255, 100, 0.35)', stroke: '#64FF64' },
+        good: { fill: 'rgba(150, 255, 150, 0.35)', stroke: '#96FF96' },
+        intermediate: { fill: 'rgba(255, 255, 150, 0.35)', stroke: '#FFFF96' },
+        bad: { fill: 'rgba(255, 200, 100, 0.35)', stroke: '#FFC864' },
+        very_bad: { fill: 'rgba(255, 150, 100, 0.35)', stroke: '#FF9664' },
+        horrible: { fill: 'rgba(255, 100, 100, 0.35)', stroke: '#FF6464' },
+        very_horrible: { fill: 'rgba(200, 50, 50, 0.35)', stroke: '#C83232' },
+        unknown: { fill: 'rgba(150, 150, 150, 0.35)', stroke: '#969696' }
+    }
+};
 
 // Sample route coordinates progressively - start coarse, refine over time
 function sampleRouteCoordinates(coords, intervalMeters = 10) {
@@ -182,11 +217,57 @@ export async function fetchAndRenderElevation() {
     }
 
     const coords = APP.currentRoute.geometry.coordinates;
+    currentRouteId++; // Increment to invalidate previous OSM fetches
+
+    // Clear any pending OSM fetch
+    if (osmFetchTimeout) {
+        clearTimeout(osmFetchTimeout);
+        osmFetchTimeout = null;
+    }
 
     // Always sample at 10m for accurate gain/loss calculation
     const samples = sampleRouteCoordinates(coords, 10);
     if (!samples || samples.length === 0) {
         return;
+    }
+
+    // Check if we have stored OSM attributes for this route
+    if (APP.currentRoute.osmAttributes) {
+        osmAttributes = APP.currentRoute.osmAttributes;
+    } else {
+        osmAttributes = null;
+    }
+
+    // Proactively fetch and match OSM data in the background if not already present
+    if (!osmAttributes) {
+        const routeIdSnapshot = currentRouteId;
+
+        const processOsmData = (data) => {
+            if (routeIdSnapshot === currentRouteId) {
+                osmAttributes = matchOSMDataToRoute(data, samples);
+                if (APP.currentRoute) {
+                    APP.currentRoute.osmAttributes = osmAttributes;
+                }
+                // Only re-render if we are in a mode that needs these attributes
+                if (APP.elevationData && coloringMode !== 'gradient') {
+                    const displayData = downsampleForDisplay(APP.elevationData);
+                    renderElevationProfile(displayData);
+                }
+            }
+        };
+
+        if (APP.currentRoute.osmData) {
+            // Use pre-loaded data immediately
+            processOsmData(APP.currentRoute.osmData);
+        } else {
+            // Background fetch fallback
+            (async () => {
+                if (routeIdSnapshot === currentRouteId) {
+                    const osmData = await fetchOSMData(coords);
+                    processOsmData(osmData);
+                }
+            })();
+        }
     }
 
     // Progressive loading with updates
@@ -197,7 +278,7 @@ export async function fetchAndRenderElevation() {
         const lossEl = document.getElementById('elev-loss-val');
         if (gainEl) gainEl.textContent = `${gain} m`;
         if (lossEl) lossEl.textContent = `${loss} m`;
-        
+
         // Downsample for display only
         const displayData = downsampleForDisplay(partialResults);
         renderElevationProfile(displayData);
@@ -220,48 +301,97 @@ export async function fetchAndRenderElevation() {
     // Downsample for display only
     const displayData = downsampleForDisplay(elevRes);
     renderElevationProfile(displayData);
+
+    // Setup coloring mode dropdown if not already done
+    setupColoringModeDropdown();
 }
 
 // Downsample elevation data for display based on total points
 function downsampleForDisplay(data) {
     if (!data || data.length === 0) return data;
-    
+
+    // Ensure all data points have their original index for attribute lookup
+    if (data[0].originalIndex === undefined) {
+        for (let i = 0; i < data.length; i++) {
+            data[i].originalIndex = i;
+        }
+    }
+
     const targetPoints = 750;
     if (data.length <= targetPoints) return data;
-    
+
     // Calculate step to achieve target points
     const step = Math.ceil(data.length / targetPoints);
     const downsampled = [];
-    
+
     for (let i = 0; i < data.length; i += step) {
         downsampled.push(data[i]);
     }
-    
+
     // Always include last point
     if (downsampled[downsampled.length - 1] !== data[data.length - 1]) {
         downsampled.push(data[data.length - 1]);
     }
-    
+
     return downsampled;
 }
 
-function getGradientColor(grade) {
-    // grade is in percent (e.g., 5 for 5%)
-    if (grade < 3) return null; // use default color
-    if (grade < 6) return 'rgba(255, 255, 150, 0.35)'; // pastel yellow 3-5%
-    if (grade < 11) return 'rgba(255, 200, 150, 0.35)'; // pastel orange 6-10%
-    if (grade < 16) return 'rgba(255, 150, 150, 0.35)'; // pastel red 10-15%
-    if (grade < 21) return 'rgba(200, 150, 255, 0.35)'; // pastel purple 15-20%
-    return 'rgba(100, 100, 100, 0.35)'; // pastel black 20%+
+function getGradientColors(grade) {
+    if (grade > 0) {
+        if (grade < 3) return { fill: null, stroke: '#32b8c6' };
+        if (grade < 6) return { fill: 'rgba(255, 255, 150, 0.35)', stroke: '#CCCC00' };
+        if (grade < 11) return { fill: 'rgba(255, 200, 150, 0.35)', stroke: '#FF8C00' };
+        if (grade < 16) return { fill: 'rgba(255, 150, 150, 0.35)', stroke: '#FF4444' };
+        if (grade < 21) return { fill: 'rgba(200, 150, 255, 0.35)', stroke: '#9932CC' };
+        return { fill: 'rgba(100, 100, 100, 0.35)', stroke: '#333333' };
+    } else {
+        const absGrade = Math.abs(grade);
+        if (absGrade < 3) return { fill: null, stroke: '#32b8c6' };
+        if (absGrade < 6) return { fill: 'rgba(150, 255, 150, 0.35)', stroke: '#44FF44' };
+        if (absGrade < 11) return { fill: 'rgba(100, 200, 100, 0.35)', stroke: '#00AA00' };
+        if (absGrade < 16) return { fill: 'rgba(50, 150, 50, 0.35)', stroke: '#007700' };
+        return { fill: 'rgba(50, 50, 50, 0.35)', stroke: '#111111' };
+    }
 }
 
-function getGradientStrokeColor(grade) {
-    if (grade < 3) return '#32b8c6'; // default cyan
-    if (grade < 6) return '#CCCC00'; // yellow 3-5%
-    if (grade < 11) return '#FF8C00'; // orange 6-10%
-    if (grade < 16) return '#FF4444'; // red 10-15%
-    if (grade < 21) return '#9932CC'; // purple 15-20%
-    return '#333333'; // dark gray/black 20%+
+function getSegmentColors(index, grades, data) {
+    if (coloringMode === 'gradient') {
+        const colors = getGradientColors(grades[index]);
+        if (!colors.fill) colors.fill = 'rgba(50,184,198,0.12)';
+        return colors;
+    }
+
+    const originalIndex = (data && data[index] && data[index].originalIndex !== undefined)
+        ? data[index].originalIndex
+        : index;
+
+    if (osmAttributes && osmAttributes[originalIndex]) {
+        const attr = osmAttributes[originalIndex];
+        const val = attr[coloringMode] || 'unknown';
+        const palette = PALETTES[coloringMode];
+        if (palette) {
+            return palette[val] || palette.unknown;
+        }
+    }
+
+    return { fill: 'rgba(50,184,198,0.12)', stroke: '#32b8c6' };
+}
+
+function drawGridLines(ctx, chartParams, visibleGridPoints) {
+    const { width, chartHeight, minE, maxE } = chartParams;
+
+    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = 'rgba(150, 150, 150, 0.2)';
+    ctx.lineWidth = 1;
+
+    visibleGridPoints.forEach(val => {
+        const y = (1 - (val - minE) / (maxE - minE)) * chartHeight;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+    });
+    ctx.setLineDash([]); // Reset for curve
 }
 
 export function renderElevationProfile(data) {
@@ -273,29 +403,52 @@ export function renderElevationProfile(data) {
     // set internal canvas size for crisp rendering
     const parent = canvas.parentElement || canvas;
     const width = parent.clientWidth;
-    const height = 100;
+    const height = 150;
     canvas.width = Math.round(width * devicePixelRatio);
     canvas.height = Math.round(height * devicePixelRatio);
     canvas.style.width = width + 'px';
     canvas.style.height = height + 'px';
 
     const ctx = canvas.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.scale(devicePixelRatio, devicePixelRatio);
-    ctx.clearRect(0, 0, width, height);
 
     const elevations = data.map(d => d.elev);
-    const minE = Math.min(...elevations);
-    const maxE = Math.max(...elevations);
-    const pad = 2; // minimal padding to maximize curve width
-    const chartHeight = height - pad * 2;
-    const chartWidth = width - pad * 2;
+    const rawMinE = Math.min(...elevations);
+    const rawMaxE = Math.max(...elevations);
+
+    // Calculate professional y-axis range (divisible by 50)
+    let minE = Math.floor(rawMinE / 50) * 50;
+    let maxE = Math.ceil(rawMaxE / 50) * 50;
+
+    // Ensure we have at least 50m range
+    if (maxE === minE) {
+        minE -= 25;
+        maxE += 25;
+    }
+
+    // Calculate grid lines (divisible by 50)
+    const gridPoints = [];
+    for (let val = minE; val <= maxE; val += 50) {
+        gridPoints.push(val);
+    }
+
+    // If we have too many points, show fewer
+    let visibleGridPoints = gridPoints;
+    if (gridPoints.length > 5) {
+        const step = Math.ceil(gridPoints.length / 4);
+        visibleGridPoints = gridPoints.filter((_, i) => i % step === 0 || i === gridPoints.length - 1);
+    }
+
+    const chartHeight = height;
+    const chartWidth = width;
 
     // Calculate gradients for each 100m segment
     const grades = [];
-    const segmentDistance = 100; // meters
+    const segmentDistance = 100;
 
     for (let i = 0; i < data.length; i++) {
-        // Find the point ~100m ahead
         let endIdx = i;
         for (let j = i + 1; j < data.length; j++) {
             if (data[j].d - data[i].d >= segmentDistance) {
@@ -307,62 +460,49 @@ export function renderElevationProfile(data) {
         if (endIdx > i) {
             const elevDiff = data[endIdx].elev - data[i].elev;
             const dist = data[endIdx].d - data[i].d;
-            const grade = dist > 0 ? (elevDiff / dist) * 100 : 0;
-            grades.push(grade);
+            grades.push(dist > 0 ? (elevDiff / dist) * 100 : 0);
         } else {
             grades.push(grades[grades.length - 1] || 0);
         }
     }
 
-    // Draw filled areas segment by segment
+    // Draw grid lines first
+    drawGridLines(ctx, { width, chartHeight, minE, maxE }, visibleGridPoints);
+
+    // BATCHING: Precompute all points for faster drawing
+    const points = data.map((p, i) => ({
+        x: (i / (data.length - 1)) * chartWidth,
+        y: (1 - (p.elev - minE) / (maxE - minE)) * chartHeight
+    }));
+
+    // Draw filled areas
     for (let i = 0; i < data.length - 1; i++) {
-        const grade = grades[i];
-        const color = getGradientColor(grade);
-
-        const x1 = (i / (data.length - 1)) * chartWidth + pad;
-        const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1; // Add 0.1px overlap
-        const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-        const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-
-        if (color) {
-            // Draw climb fill
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.lineTo(x2, height - pad);
-            ctx.lineTo(x1, height - pad);
-            ctx.closePath();
-            ctx.fillStyle = color;
-            ctx.fill();
-        } else {
-            // Draw default (flat/descent) fill
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.lineTo(x2, height - pad);
-            ctx.lineTo(x1, height - pad);
-            ctx.closePath();
-            ctx.fillStyle = 'rgba(50,184,198,0.12)';
-            ctx.fill();
-        }
-    }
-
-    // Draw stroke line segment by segment with slight overlap
-    for (let i = 0; i < data.length - 1; i++) {
-        const grade = grades[i];
-        const color = getGradientStrokeColor(grade);
-
-        const x1 = (i / (data.length - 1)) * chartWidth + pad;
-        const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1; // Add 0.1px overlap
-        const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-        const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+        const colors = getSegmentColors(i, grades, data);
+        const p1 = points[i];
+        const p2 = points[i + 1];
 
         ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'square';
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.lineTo(p2.x, height);
+        ctx.lineTo(p1.x, height);
+        ctx.closePath();
+        ctx.fillStyle = colors.fill;
+        ctx.fill();
+    }
+
+    // Draw stroke lines
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < data.length - 1; i++) {
+        const colors = getSegmentColors(i, grades, data);
+        const p1 = points[i];
+        const p2 = points[i + 1];
+
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.strokeStyle = colors.stroke;
         ctx.stroke();
     }
 
@@ -373,24 +513,30 @@ export function renderElevationProfile(data) {
         xAxis.innerHTML = `<div>0 km</div><div>${totalKm.toFixed(1)} km</div>`;
     }
 
-    // draw side scale (min/max) in the sidebar
+    // draw side scale (absolute values)
     const sideScale = document.getElementById('elevationSideScale');
     if (sideScale) {
-        sideScale.innerHTML = `<div>${Math.round(maxE)} m</div><div style="opacity:0.6">${Math.round((maxE + minE) / 2)} m</div><div>${Math.round(minE)} m</div>`;
+        sideScale.innerHTML = visibleGridPoints.map(val => {
+            const topPercent = (1 - (val - minE) / (maxE - minE)) * 100;
+            return `<div class="sidescale-label" style="top: ${topPercent}%">${val} m</div>`;
+        }).join('');
     }
 
     // Store chart state to avoid full redraws on hover
-    let chartState = { data, width, height, pad, chartWidth, chartHeight, minE, maxE, grades };
+    let chartState = { data, width, height, pad: 0, chartWidth, chartHeight, minE, maxE, grades, visibleGridPoints };
     let lastIdx = -1;
     let rafId = null;
     let moveCount = 0;
+
+    // Update stats summary sidebar (desktop)
+    updateStatsSummary(data, grades);
 
     // attach mouse events
     canvas.onmousemove = function (evt) {
         moveCount++;
         const rect = canvas.getBoundingClientRect();
         const mouseX = (evt.clientX - rect.left);
-        const rel = Math.max(0, Math.min(1, (mouseX - pad) / (width - pad * 2)));
+        const rel = Math.max(0, Math.min(1, mouseX / width));
         const idx = Math.round(rel * (data.length - 1));
         const point = data[idx];
         if (!point) return;
@@ -405,7 +551,7 @@ export function renderElevationProfile(data) {
                 const tooltipRect = tooltip.getBoundingClientRect();
                 const tooltipWidth = tooltipRect.width || 200;
                 const tooltipHeight = tooltipRect.height || 60;
-                
+
                 let left = evt.clientX + 10;
                 let top = evt.clientY - tooltipHeight - 10;
 
@@ -440,9 +586,39 @@ export function renderElevationProfile(data) {
             const gradientText = gradient > 0 ? `+${gradient.toFixed(1)}%` : `${gradient.toFixed(1)}%`;
             const gradientColor = Math.abs(gradient) > 8 ? (gradient > 0 ? '#ff4444' : '#44ff44') : '#ccc';
 
+            let extraInfo = '';
+            // Use originalIndex for attribute lookup
+            const originalIdx = point.originalIndex ?? idx;
+
+            if (osmAttributes && osmAttributes[originalIdx]) {
+                const attrs = osmAttributes[originalIdx];
+                const parts = [];
+
+                const showAll = coloringMode === 'gradient';
+
+                if ((showAll || coloringMode === 'highway') && attrs.highway) {
+                    if (!showAll || attrs.highway !== 'unknown') {
+                        parts.push(`<div>${HIGHWAY_LABELS[attrs.highway] || attrs.highway}</div>`);
+                    }
+                }
+                if ((showAll || coloringMode === 'surface') && attrs.surface) {
+                    if (!showAll || attrs.surface !== 'unknown') {
+                        parts.push(`<div>${SURFACE_LABELS[attrs.surface] || attrs.surface}</div>`);
+                    }
+                }
+                if ((showAll || coloringMode === 'smoothness') && attrs.smoothness) {
+                    if (!showAll || attrs.smoothness !== 'unknown') {
+                        parts.push(`<div>${SMOOTHNESS_LABELS[attrs.smoothness] || attrs.smoothness}</div>`);
+                    }
+                }
+
+                extraInfo = parts.join('');
+            }
+
             tooltip.innerHTML = `
                 <div><strong>${(point.d / 1000).toFixed(2)} km</strong> — <strong>${Math.round(point.elev)} m</strong></div>
                 <div style="color: ${gradientColor}; font-weight: 600;">${gradientText} gradient</div>
+                ${extraInfo}
             `;
         }
 
@@ -471,7 +647,7 @@ export function renderElevationProfile(data) {
     canvas.onclick = function (evt) {
         const rect = canvas.getBoundingClientRect();
         const mouseX = (evt.clientX - rect.left);
-        const rel = Math.max(0, Math.min(1, (mouseX - pad) / (width - pad * 2)));
+        const rel = Math.max(0, Math.min(1, mouseX / width));
         const idx = Math.round(rel * (data.length - 1));
         const point = data[idx];
         if (point && APP.map) {
@@ -490,65 +666,57 @@ export function renderElevationProfile(data) {
 
 // Helper to draw just the cursor line without full redraw
 function drawCursorLine(ctx, state, idx) {
-    const { data, width, height, pad, chartWidth, chartHeight, minE, maxE, grades } = state;
-    
+    const { data, width, height, chartWidth, chartHeight, minE, maxE, grades, visibleGridPoints } = state;
+
     ctx.clearRect(0, 0, width, height);
+
+    // Redraw grid lines
+    if (visibleGridPoints) {
+        drawGridLines(ctx, state, visibleGridPoints);
+    }
+
+    // BATCHING: Precompute points (same as main render)
+    const points = data.map((p, i) => ({
+        x: (i / (data.length - 1)) * chartWidth,
+        y: (1 - (p.elev - minE) / (maxE - minE)) * chartHeight
+    }));
 
     // Redraw filled areas
     for (let i = 0; i < data.length - 1; i++) {
-        const grade = grades[i];
-        const color = getGradientColor(grade);
+        const colors = getSegmentColors(i, grades, data);
+        const p1 = points[i];
+        const p2 = points[i + 1];
 
-        const x1 = (i / (data.length - 1)) * chartWidth + pad;
-        const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1;
-        const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-        const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-
-        if (color) {
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.lineTo(x2, height - pad);
-            ctx.lineTo(x1, height - pad);
-            ctx.closePath();
-            ctx.fillStyle = color;
-            ctx.fill();
-        } else {
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.lineTo(x2, height - pad);
-            ctx.lineTo(x1, height - pad);
-            ctx.closePath();
-            ctx.fillStyle = 'rgba(50,184,198,0.12)';
-            ctx.fill();
-        }
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.lineTo(p2.x, height);
+        ctx.lineTo(p1.x, height);
+        ctx.closePath();
+        ctx.fillStyle = colors.fill;
+        ctx.fill();
     }
 
     // Redraw stroke lines
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
     for (let i = 0; i < data.length - 1; i++) {
-        const grade = grades[i];
-        const color = getGradientStrokeColor(grade);
-
-        const x1 = (i / (data.length - 1)) * chartWidth + pad;
-        const x2 = ((i + 1) / (data.length - 1)) * chartWidth + pad + 0.1;
-        const y1 = pad + (1 - (data[i].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
-        const y2 = pad + (1 - (data[i + 1].elev - minE) / Math.max(1, (maxE - minE))) * chartHeight;
+        const colors = getSegmentColors(i, grades, data);
+        const p1 = points[i];
+        const p2 = points[i + 1];
 
         ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'square';
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.strokeStyle = colors.stroke;
         ctx.stroke();
     }
 
     // Draw vertical cursor line
     ctx.beginPath();
-    const vx = (idx / (data.length - 1)) * chartWidth + pad;
-    ctx.moveTo(vx, pad);
-    ctx.lineTo(vx, height - pad);
+    const vx = (idx / (data.length - 1)) * chartWidth;
+    ctx.moveTo(vx, 0);
+    ctx.lineTo(vx, height);
     ctx.strokeStyle = 'rgba(255,255,255,0.7)';
     ctx.lineWidth = 1;
     ctx.stroke();
@@ -575,6 +743,148 @@ export function drawElevationCursor(routePoint) {
 
     APP.elevationHoverIndex = closestIdx;
     renderElevationProfile(data);
+}
 
-    // Draw cursor logic could be added here if we want to reverse-sync map->chart cursor
+function setupColoringModeDropdown() {
+    const header = document.querySelector('.elevation-header');
+    if (!header || document.getElementById('coloringModeSelect')) return;
+
+    const selectWrapper = document.createElement('div');
+    selectWrapper.style.cssText = 'margin-left: auto;';
+
+    const select = document.createElement('select');
+    select.id = 'coloringModeSelect';
+    select.className = 'elevation-mode-select';
+
+    const options = [
+        { value: 'gradient', label: 'Gradient %' },
+        { value: 'highway', label: 'Road Type' },
+        { value: 'surface', label: 'Surface' },
+        { value: 'smoothness', label: 'Smoothness' }
+    ];
+
+    options.forEach(opt => {
+        const option = document.createElement('option');
+        option.value = opt.value;
+        option.textContent = opt.label;
+        select.appendChild(option);
+    });
+
+    select.addEventListener('change', async (e) => {
+        const previousMode = coloringMode;
+        coloringMode = e.target.value;
+
+        // Clear OSM attributes when switching to gradient mode
+        if (coloringMode === 'gradient') {
+            if (osmFetchTimeout) {
+                clearTimeout(osmFetchTimeout);
+                osmFetchTimeout = null;
+            }
+        }
+
+        // Re-render
+        if (APP.elevationData) {
+            const displayData = downsampleForDisplay(APP.elevationData);
+            renderElevationProfile(displayData);
+        }
+
+        // Fetch OSM data in background if needed
+        if (coloringMode !== 'gradient' && !osmAttributes) {
+            const coords = APP.currentRoute?.geometry?.coordinates;
+            if (coords) {
+                const routeIdSnapshot = currentRouteId;
+                // Small delay before fetching
+                setTimeout(async () => {
+                    if (routeIdSnapshot === currentRouteId && coloringMode !== 'gradient') {
+                        const samples = sampleRouteCoordinates(coords, 10);
+                        const osmData = await fetchOSMData(coords);
+                        if (routeIdSnapshot === currentRouteId && coloringMode !== 'gradient') {
+                            osmAttributes = matchOSMDataToRoute(osmData, samples);
+                            // Store with route
+                            if (APP.currentRoute) {
+                                APP.currentRoute.osmAttributes = osmAttributes;
+                            }
+                            const displayData = downsampleForDisplay(APP.elevationData);
+                            renderElevationProfile(displayData);
+                        }
+                    }
+                }, 1000);
+            }
+        }
+    });
+
+    selectWrapper.appendChild(select);
+    header.insertBefore(selectWrapper, header.querySelector('.btn-elevation-collapse'));
+}
+
+function updateStatsSummary(data, grades) {
+    const container = document.getElementById('elevationStatsSummary');
+    if (!container) return;
+
+    container.innerHTML = '';
+    const stats = new Map();
+    const totalPoints = data.length;
+
+    if (coloringMode === 'gradient') {
+        const ranges = [
+            { min: 16, label: '> 16% Climb', color: getGradientColors(20).stroke },
+            { min: 11, max: 16, label: '11-16% Climb', color: getGradientColors(13).stroke },
+            { min: 6, max: 11, label: '6-11% Climb', color: getGradientColors(8).stroke },
+            { min: 3, max: 6, label: '3-6% Climb', color: getGradientColors(4).stroke },
+            { min: -3, max: 3, label: 'Flat (<3%)', color: '#32b8c6' },
+            { min: -6, max: -3, label: '3-6% Descent', color: getGradientColors(-4).stroke },
+            { min: -11, max: -6, label: '6-11% Descent', color: getGradientColors(-8).stroke },
+            { min: -16, max: -11, label: '11-16% Descent', color: getGradientColors(-13).stroke },
+            { max: -16, label: '> 16% Descent', color: getGradientColors(-20).stroke }
+        ];
+
+        ranges.forEach(r => stats.set(r.label, { count: 0, color: r.color }));
+
+        grades.forEach(g => {
+            const range = ranges.find(r => {
+                if (r.min !== undefined && r.max !== undefined) return g >= r.min && g < r.max;
+                if (r.min !== undefined) return g >= r.min;
+                if (r.max !== undefined) return g < r.max;
+                return false;
+            });
+            if (range) stats.get(range.label).count++;
+        });
+    } else if (osmAttributes) {
+        data.forEach((point, i) => {
+            const originalIdx = point.originalIndex ?? i;
+            const attr = osmAttributes[originalIdx];
+            const value = attr?.[coloringMode] || 'unknown';
+            const palette = PALETTES[coloringMode];
+            const color = palette ? (palette[value]?.stroke || palette.unknown.stroke) : '#969696';
+
+            const labelsMap = coloringMode === 'highway' ? HIGHWAY_LABELS :
+                coloringMode === 'surface' ? SURFACE_LABELS :
+                    coloringMode === 'smoothness' ? SMOOTHNESS_LABELS : {};
+            const label = labelsMap[value] || (value !== 'unknown' ? value : 'Unknown');
+
+            if (!stats.has(label)) stats.set(label, { count: 0, color });
+            stats.get(label).count++;
+        });
+    } else {
+        return; // No data to show
+    }
+
+    // Sort by count descending
+    const sortedStats = Array.from(stats.entries())
+        .filter(([_, data]) => data.count > 0)
+        .sort((a, b) => b[1].count - a[1].count);
+
+    sortedStats.forEach(([label, info]) => {
+        const percent = Math.round((info.count / totalPoints) * 100);
+        if (percent === 0) return;
+
+        const item = document.createElement('div');
+        item.className = 'stat-summary-item';
+        item.innerHTML = `
+            <div class="stat-color-dot" style="background: ${info.color}"></div>
+            <div class="stat-label">${label}</div>
+            <div class="stat-percent">${percent}%</div>
+        `;
+        container.appendChild(item);
+    });
 }

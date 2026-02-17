@@ -27,9 +27,10 @@
 
         <div class="sidebar-card">
             <div class="card-header">
-                <button id="collapseSidebarBtn" class="btn-icon-toggle btn-collapse" title="Collapse" aria-label="Collapse Sidebar">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <button id="collapseSidebarBtn" class="btn-icon-toggle btn-collapse" title="Collapse"
+                    aria-label="Collapse Sidebar">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="18 15 12 9 6 15"></polyline>
                     </svg>
                 </button>
@@ -139,43 +140,60 @@
                 <div class="elevation-header">
                     <div class="elevation-stats">
                         <div id="elev-distance" class="stat" title="Distance">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <line x1="5" y1="12" x2="19" y2="12"></line>
                                 <polyline points="12 5 19 12 12 19"></polyline>
                             </svg>
                             <strong id="elev-distance-val">0 km</strong>
                         </div>
                         <div id="elev-duration" class="stat" title="Duration">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <circle cx="12" cy="12" r="10"></circle>
                                 <polyline points="12 6 12 12 16 14"></polyline>
                             </svg>
                             <strong id="elev-duration-val">0m</strong>
                         </div>
                         <div id="elev-gain" class="stat" title="Elevation Gain">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="18 15 12 9 6 15"></polyline>
                             </svg>
                             <strong id="elev-gain-val">0 m</strong>
                         </div>
                         <div id="elev-loss" class="stat" title="Elevation Loss">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="6 9 12 15 18 9"></polyline>
                             </svg>
                             <strong id="elev-loss-val">0 m</strong>
                         </div>
+                        <div id="elev-speed" class="stat" title="Average Speed">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="9"></circle>
+                                <line x1="20" y1="4" x2="4" y2="20"></line>
+                            </svg>
+                            <strong id="elev-speed-val">0 km/h</strong>
+                        </div>
                     </div>
-                    <button id="collapseElevationBtn" class="btn-icon-toggle btn-elevation-collapse" title="Collapse" aria-label="Collapse Elevation">
+                    <button id="collapseElevationBtn" class="btn-icon-toggle btn-elevation-collapse" title="Collapse"
+                        aria-label="Collapse Elevation">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <polyline points="6 9 12 15 18 9"></polyline>
                         </svg>
                     </button>
                 </div>
-                <div style="position:relative;">
-                    <canvas id="elevationCanvas" width="1600" height="120"></canvas>
+                <div class="elevation-main-content">
+                    <div id="elevationSideScale" class="elevation-sidescale" aria-hidden="true"></div>
+                    <div style="position:relative; flex: 1; min-width: 0;">
+                        <canvas id="elevationCanvas" width="1600" height="120"></canvas>
+                        <div id="elevationXAxis" class="elevation-xaxis" aria-hidden="true"></div>
+                    </div>
+                    <div id="elevationStatsSummary" class="elevation-stats-summary"></div>
                 </div>
-                <div id="elevationXAxis" class="elevation-xaxis" aria-hidden="true"></div>
             </div>
         </div>
 
@@ -308,16 +326,22 @@
                                 <h4 style="margin-bottom:15px;">Search History</h4>
                                 <div style="display:flex; flex-direction:column; gap:8px;">
                                     <button id="clearTopSearchesBtn" class="btn btn-outline" style="width:100%;">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2" style="margin-right:6px;">
                                             <polyline points="3 6 5 6 21 6"></polyline>
-                                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                            <path
+                                                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">
+                                            </path>
                                         </svg>
                                         Clear Top Searches
                                     </button>
                                     <button id="clearRecentSearchesBtn" class="btn btn-outline" style="width:100%;">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2" style="margin-right:6px;">
                                             <polyline points="3 6 5 6 21 6"></polyline>
-                                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                            <path
+                                                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">
+                                            </path>
                                         </svg>
                                         Clear Recent Searches
                                     </button>
@@ -382,20 +406,27 @@
                             <div class="security-section">
                                 <div class="security-card">
                                     <h4>OneLapFit Integration</h4>
-                                    <p class="text-secondary" style="font-size:13px; margin-bottom:15px;">Connect your OneLapFit account to upload routes directly to your device.</p>
+                                    <p class="text-secondary" style="font-size:13px; margin-bottom:15px;">Connect your
+                                        OneLapFit account to upload routes directly to your device.</p>
                                     <div class="form-group">
                                         <label>OneLapFit Email</label>
-                                        <input type="email" id="oneLapFitEmail" class="search-input" placeholder="your@email.com">
+                                        <input type="email" id="oneLapFitEmail" class="search-input"
+                                            placeholder="your@email.com">
                                     </div>
                                     <div class="form-group">
                                         <label>OneLapFit Password</label>
-                                        <input type="password" id="oneLapFitPassword" class="search-input" placeholder="Your OneLapFit password">
+                                        <input type="password" id="oneLapFitPassword" class="search-input"
+                                            placeholder="Your OneLapFit password">
                                     </div>
                                     <div style="display:flex; gap:8px; margin-top:10px;">
-                                        <button id="testDeviceCredsBtn" class="btn btn-outline" style="flex:1;">Test Connection</button>
-                                        <button id="saveDeviceCredsBtn" class="btn btn-primary" style="flex:1;">Save</button>
+                                        <button id="testDeviceCredsBtn" class="btn btn-outline" style="flex:1;">Test
+                                            Connection</button>
+                                        <button id="saveDeviceCredsBtn" class="btn btn-primary"
+                                            style="flex:1;">Save</button>
                                     </div>
-                                    <button id="deleteDeviceCredsBtn" class="btn btn-outline" style="width:100%; margin-top:8px; display:none; color:var(--accent-red);">Disconnect Device</button>
+                                    <button id="deleteDeviceCredsBtn" class="btn btn-outline"
+                                        style="width:100%; margin-top:8px; display:none; color:var(--accent-red);">Disconnect
+                                        Device</button>
                                 </div>
                             </div>
                         </div>
